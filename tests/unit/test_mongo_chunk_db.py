@@ -7,10 +7,12 @@ class TestMongoDB(unittest.TestCase):
 
     @classmethod
     def setUpClass(self):
-        self.collection_name = "test_mongo_db_chunks"
-        self.kb_id = "test_mongo_db"
+        self.collection_name = "test_mongo_kb_chunks"
+        self.db_name = "test_mongo_db"
+        self.kb_id = "test_mongo_kb"
         self.uri = "mongodb://localhost:27017"
         self.db = MongoDB(
+            self.db_name,
             self.kb_id,
             self.uri,
             self.collection_name
@@ -142,6 +144,7 @@ class TestMongoDB(unittest.TestCase):
 
     def test__save_and_load_from_dict(self):
         db = MongoDB(
+            self.db_name,
             self.kb_id,
             collection_name=self.collection_name,
             uri=self.uri

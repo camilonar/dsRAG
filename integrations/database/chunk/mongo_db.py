@@ -11,12 +11,12 @@ def sync(awaitable):
     return loop.run_until_complete(awaitable)
 
 class MongoDB(ChunkDB):
-    # TODO check proper way of executing async methods when integrating with FastAPI
 
-    def __init__(self, kb_id: str, uri: str, collection_name: str = None) -> None:
+    def __init__(self, db_name: str, kb_id: str, uri: str, collection_name: str = None) -> None:
+        self.db_name = db_name
         self.kb_id = kb_id
         self.uri = uri
-        self.mongo_db = MongoCrud(uri=uri, db_name=self.kb_id.replace(" ", "_"))
+        self.mongo_db = MongoCrud(uri=uri, db_name=self.db_name)
         if collection_name is not None:
             self.collection_name = collection_name
         else:
@@ -290,6 +290,7 @@ class MongoDB(ChunkDB):
     def to_dict(self) -> dict[str, str]:
         return {
             **super().to_dict(),
+            "db_name": self.db_name,
             "kb_id": self.kb_id,
             "uri": self.uri,
             "collection_name": self.collection_name,
