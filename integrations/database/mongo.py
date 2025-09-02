@@ -3,6 +3,8 @@ from typing import Any, Dict, Optional
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import UpdateOne, UpdateMany
+from pymongo.operations import SearchIndexModel
+
 
 class MongoCrud:
     """
@@ -233,20 +235,16 @@ class MongoCrud:
             raise e
 
     async def count_by_query(
-        self, collection: str, query: Dict[str, Any], exclude_deleted: bool = True
+        self, collection: str, query: Dict[str, Any]
     ) -> int:
         """
         Counts the number of items in a collection with filters.
 
         :param collection: Name of the collection.
         :param query: Search filters.
-        :param exclude_deleted: Indicates whether deleted documents (status=True) should be excluded.
         :return: Count.
         :raises Exception: If an error occurs during the query.
         """
-        if exclude_deleted:
-            query["status"] = True
-
         try:
             return await self._db[collection].count_documents(query)
         except Exception as e:
@@ -265,8 +263,115 @@ class MongoCrud:
             print(f"Database - {str(e)}")
             raise e
 
-    async def aggregate(self, collection: str, pipeline: list[dict]):
+    async def aggregate(self, collection: str, pipeline: list[dict]) -> list:
         docs = []
         async for doc in self._db[collection].aggregate(pipeline):
             docs.append(doc)
         return docs
+
+    async def list_collection_names(self) -> list[str]:
+        return await self._db.list_collection_names()
+
+    async def list_search_indices(self, collection: str) -> list[dict]:
+        indices = []
+        async for idx in self._db[collection].list_search_indexes():
+            indices.append(idx)
+        return indices
+
+    async def create_vector_index(self, collection_name: str, dimension: int, path: str = "embeddings",
+                            index_name: str = None, similarity: str = "cosine", filters: list[str] = []) -> Optional[str]:
+        # Define the vector search index
+        if not index_name:
+            index_name = collection_name + "_vector_index"
+
+        vector_index_definition = {
+            "fields": [
+                {
+                    "type": "vector",
+                    "path": path,  # Field containing your vector embeddings
+                    "numDimensions": dimension,  # Example: dimensionality of your embeddings
+                    "similarity": similarity  # Example: cosine similarity
+                }
+            ]
+        }
+
+        for _filter in filters:
+            vector_index_definition["fields"].append(
+                {
+                    "type": "filter",
+                    "path": _filter
+                }
+            )
+
+        # Create a SearchIndexModel object
+        search_index_model = SearchIndexModel(
+            name=index_name,
+            definition=vector_index_definition,
+            type="vectorSearch"
+        )
+
+        try:
+            # Create the vector search index
+            index_name = await self._db[collection_name].create_search_index(search_index_model)
+            print(f"Vector search index '{index_name}' is being built.")
+            return index_name
+        except Exception as e:
+            print(f"Error creating vector search index: {e}")
+            return None
+
+    async def search_by_embedding(
+        self,
+        collection: str,
+        index: str,
+        path: str,
+        embedding: list[float],
+        top_k: int = 5,
+        num_candidates: int = 100,
+        _filter: dict = {},
+    ) -> list[Dict[str, Any]]:
+        """
+        Perform a semantic search using embeddings with MongoDB Atlas Vector Search.
+
+        :param collection: Name of the collection.
+        :param index: Name of the search index.
+        :param path: Field where the embeddings are stored.
+        :param embedding: Query embedding (list of floats).
+        :param top_k: Number of closest results to return.
+        :param num_candidates: Number of candidate documents to evaluate in the initial search phase.
+        :param _filter: Contains filters and limits the search space.
+        :return: List of most similar documents based on the embedding.
+        """
+        try:
+            pipeline = [
+                {
+                    "$vectorSearch": {
+                        "index": index,
+                        "path": path,
+                        "queryVector": embedding,
+                        "numCandidates": num_candidates,
+                        "limit": top_k,
+                        "filter": _filter,
+                    }
+                },
+                {
+                    "$project": {
+                        "score": {"$meta": "vectorSearchScore"},
+                        "metadata": "$$ROOT",
+                    }
+                },
+            ]
+
+            cursor = self._db[collection].aggregate(pipeline)
+            documents = await cursor.to_list(length=top_k)
+            updated_documents = self.update_document_fields_list(
+                [doc["metadata"] for doc in documents[:top_k]]
+            )
+            final_results = [
+                {"metadata": doc, "score": documents[i]["score"]}
+                for i, doc in enumerate(updated_documents)
+            ]
+            return final_results
+
+        except Exception as e:
+            print(f"Error on search by embedding: {str(e)}")
+            return []

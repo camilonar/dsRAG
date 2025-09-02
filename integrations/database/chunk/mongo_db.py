@@ -269,10 +269,10 @@ class MongoDB(ChunkDB):
 
     def get_total_num_characters(self) -> int:
         pipeline = [
-            {'group': {
+            {'$group': {
                 '_id': None,
                 'total': {
-                    '$sum': "$update_frequency"
+                    '$sum': "chunk_length"
                 }
             }}
         ]
