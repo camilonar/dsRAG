@@ -757,13 +757,20 @@ class KnowledgeBase:
 
         Internal method for parallel query execution.
         """
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(self._search, query, 200, metadata_filter) for query in search_queries]
+        if self.vector_db.is_async():
             all_ranked_results = []
-            for future in futures:
-                ranked_results = future.result()
+            for query in search_queries:
+                ranked_results = self._search(query, 20, metadata_filter)
                 all_ranked_results.append(ranked_results)
-        return all_ranked_results
+            return all_ranked_results
+        else:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [executor.submit(self._search, query, 200, metadata_filter) for query in search_queries]
+                all_ranked_results = []
+                for future in futures:
+                    ranked_results = future.result()
+                    all_ranked_results.append(ranked_results)
+            return all_ranked_results
     
     def _get_segment_page_numbers(self, doc_id: str, chunk_start: int, chunk_end: int) -> tuple:
         """Get page numbers for a segment.

@@ -1,4 +1,3 @@
-import asyncio
 from typing import Optional
 
 import numpy as np
@@ -6,11 +5,7 @@ import numpy as np
 from dsrag.database.vector import VectorDB
 from dsrag.database.vector.types import MetadataFilter, VectorSearchResult
 from integrations.database.mongo import MongoCrud
-
-
-def sync(awaitable):
-    loop = asyncio.get_event_loop()
-    return loop.run_until_complete(awaitable)
+from integrations.utils.async_utils import sync
 
 
 def format_metadata_filter(metadata_filter: MetadataFilter) -> dict:
@@ -122,13 +117,15 @@ class MongoAtlasDB(VectorDB):
         # Convert the query vector to a list if it is a NumPy array
         if isinstance(query_vector, np.ndarray):
             query_vector = query_vector.tolist()
+        if isinstance(query_vector[0], list):
+            query_vector = query_vector[0] # Unpack the vector
         if metadata_filter:
             formatted_metadata_filter = format_metadata_filter(metadata_filter)
             search_results = sync(self.mongo_db.search_by_embedding(self.collection_name, self.index_name, "embeddings",
-                                              embedding=query_vector[0], top_k=top_k, _filter=formatted_metadata_filter))
+                                              embedding=query_vector, top_k=top_k, _filter=formatted_metadata_filter))
         else:
             search_results = sync(self.mongo_db.search_by_embedding(self.collection_name, self.index_name, "embeddings",
-                                                                    embedding=query_vector[0], top_k=top_k))
+                                                                    embedding=query_vector, top_k=top_k))
 
         results = []
         for match in search_results:
@@ -165,3 +162,6 @@ class MongoAtlasDB(VectorDB):
             "uri": self.uri,
             "collection_name": self.collection_name,
         }
+
+    def is_async(self) -> bool:
+        return True

@@ -66,3 +66,9 @@ class VectorDB(ABC):
         Delete the vector database.
         """
         pass
+
+    def is_async(self) -> bool:
+        """
+        Indicates if the database uses async methods.
+        """
+        return False

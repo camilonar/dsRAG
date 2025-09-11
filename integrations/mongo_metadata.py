@@ -1,12 +1,6 @@
-import asyncio
-
 from dsrag.metadata import MetadataStorage
 from integrations.database.mongo import MongoCrud
-
-
-def sync(awaitable):
-    loop = asyncio.get_event_loop()
-    return loop.run_until_complete(awaitable)
+from integrations.utils.async_utils import sync
 
 
 class MongoDBMetadataStorage(MetadataStorage):
@@ -22,7 +16,6 @@ class MongoDBMetadataStorage(MetadataStorage):
         query = {'kb_id': kb_id}
         projection = {'kb_id': 1}
         item = sync(self.mongo_db.read(self.collection_name, query, projection))
-
         return bool(item)
 
     def load(self, kb_id: str) -> dict:

@@ -1,14 +1,11 @@
-import asyncio
 import datetime
 import time
 from typing import Any, Optional
 
 from dsrag.database.chunk import ChunkDB, FormattedDocument
 from integrations.database.mongo import MongoCrud
+from integrations.utils.async_utils import sync
 
-def sync(awaitable):
-    loop = asyncio.get_event_loop()
-    return loop.run_until_complete(awaitable)
 
 class MongoDB(ChunkDB):
 
