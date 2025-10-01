@@ -337,6 +337,22 @@ class PostgresChunkDB(ChunkDB):
         results = cur.fetchall()
         conn.close()
         return [result[0] for result in results]
+
+    def doc_id_exists(self, doc_id: str) -> bool:
+        # Retrieve all document IDs from the sqlite table
+        conn = psycopg2.connect(
+            dbname=self.database,
+            user=self.username,
+            password=self.password,
+            host=self.host,
+            port=self.port
+        )
+        cur = conn.cursor()
+        query_statement = f"SELECT DISTINCT doc_id FROM {self.table_name} WHERE doc_id='{doc_id}' LIMIT 1"
+        cur.execute(query_statement)
+        results = cur.fetchall()
+        conn.close()
+        return True if results else False
     
     def get_document_count(self) -> int:
         # Retrieve the number of documents in the sqlite table
@@ -348,7 +364,7 @@ class PostgresChunkDB(ChunkDB):
             port=self.port
         )
         cur = conn.cursor()
-        cur.execute(f"SELECT COUNT(DISTINCT doc_id) FROM {self.table_name}")
+        cur.execute(f"SELECT COUNT(DISTINCT doc_id) FROM {self.table_name} ")
         result = cur.fetchone()
         conn.close()
         if result is None:

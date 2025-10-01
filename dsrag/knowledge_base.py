@@ -427,7 +427,7 @@ class KnowledgeBase:
                 raise ValueError("Either text or file_path must be provided")
 
             # verify that the document does not already exist in the KB - the doc_id should be unique
-            if doc_id in self.chunk_db.get_all_doc_ids():
+            if self.chunk_db.doc_id_exists(doc_id):
                 ingestion_logger.warning(
                     "Document already exists in knowledge base, skipping", 
                     extra=base_extra

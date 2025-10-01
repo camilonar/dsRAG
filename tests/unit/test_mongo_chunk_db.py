@@ -133,6 +133,20 @@ class TestMongoDB(unittest.TestCase):
         # There should only be one document with the supp_id 'Supp ID 1'
         self.assertEqual(len(docs), 1)
 
+    def test__doc_id_exists(self):
+        doc_id = "doc3"
+        chunks = {
+            0: {"chunk_text": "Content of chunk 3"},
+        }
+        self.db.add_document(doc_id=doc_id, chunks=chunks)
+
+        # The document should exist
+        doc_id_exists = self.db.doc_id_exists("doc3")
+        self.assertEqual(doc_id_exists, True)
+        # The document should NOT exist
+        doc_id_exists = self.db.doc_id_exists("doc4")
+        self.assertEqual(doc_id_exists, False)
+
     def test__remove_document(self):
         doc_id = "doc1"
         chunks = {0: {"chunk_text": "Content of chunk 1"}}

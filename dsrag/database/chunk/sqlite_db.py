@@ -298,6 +298,15 @@ class SQLiteDB(ChunkDB):
         results = c.fetchall()
         conn.close()
         return [result[0] for result in results]
+
+    def doc_id_exists(self, doc_id: str) -> bool:
+        conn = sqlite3.connect(os.path.join(self.db_path, f"{self.kb_id}.db"))
+        c = conn.cursor()
+        query_statement = f"SELECT DISTINCT doc_id FROM documents WHERE doc_id='{doc_id}' LIMIT 1"
+        c.execute(query_statement)
+        results = c.fetchall()
+        conn.close()
+        return True if results else False
     
     def get_document_count(self) -> int:
         # Retrieve the number of documents in the sqlite table

@@ -9,6 +9,13 @@ from integrations.utils.async_utils import sync
 
 class MongoDB(ChunkDB):
 
+    def doc_id_exists(self, doc_id: str) -> bool:
+        query = {'doc_id': doc_id}
+        projection = {'doc_id': 1}
+        item = sync(self.mongo_db.read(self.collection_name, query, projection))
+
+        return True if item else False
+
     def __init__(self, db_name: str, kb_id: str, uri: str, collection_name: str = None) -> None:
         self.db_name = db_name
         self.kb_id = kb_id

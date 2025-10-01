@@ -130,6 +130,9 @@ class BasicChunkDB(ChunkDB):
                 total_num_characters += len(chunk["chunk_text"])
         return total_num_characters
 
+    def doc_id_exists(self, doc_id: str) -> bool:
+        return doc_id in self.data
+
     def load(self):
         try:
             with open(self.storage_path, "rb") as f:
