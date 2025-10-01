@@ -16,12 +16,16 @@ def create_kb(kb_id: str, metadata_storage: MetadataStorage) -> KnowledgeBase:
     embedding = VoyageAIEmbedding(model=env.EMBEDDING_MODEL, dimension=env.EMBEDDING_MODEL_DIM)
     reranker = VoyageReranker(model=env.RERANKER_MODEL)
     llm = OpenAIChatAPI(model=env.LLM_MODEL)
-    file_system = CloudStorageFileSystem(base_path="", bucket_name=env.DB_NAME, in_cloud=env.IN_CLOUD)
+    file_system = create_file_system()
 
     kb = KnowledgeBase(kb_id=kb_id, vector_db=vector_db, chunk_db=chunk_db, embedding_model=embedding,
                        reranker=reranker, file_system=file_system, metadata_storage=metadata_storage,
                        auto_context_model=llm, language=env.KB_LANGUAGE)
     return kb
+
+def create_file_system():
+    file_system = CloudStorageFileSystem(base_path="", bucket_name=env.DB_NAME, in_cloud=env.IN_CLOUD)
+    return file_system
 
 def __load_kb(kb_id: str, metadata_storage: MetadataStorage) -> KnowledgeBase:
     kb = KnowledgeBase(kb_id=kb_id, metadata_storage=metadata_storage)

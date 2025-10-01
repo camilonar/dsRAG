@@ -1,6 +1,8 @@
 import os
 
 IN_CLOUD = bool(os.getenv("IN_CLOUD", False))
+SIGNED_URL_EXPIRATION_TIME = int(os.getenv("SIGNED_URL_EXPIRATION_TIME", 200))
+
 MONGODB_URI = os.getenv("MONGODB_URI")
 DB_NAME = os.getenv("DB_NAME")
 KB_COLLECTION_NAME = os.getenv("KB_COLLECTION_NAME", "knowledge_bases")

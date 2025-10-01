@@ -1,3 +1,4 @@
+import datetime
 import io
 import json
 import os
@@ -8,9 +9,11 @@ from google.auth.transport import requests
 from google.cloud import storage
 
 from dsrag.dsparse.file_parsing.file_system import FileSystem
+from integrations.utils import env, mime_utils
+from integrations.utils.url_signer import UrlSigner
 
 
-class CloudStorageFileSystem(FileSystem):
+class CloudStorageFileSystem(FileSystem, UrlSigner):
     """
     Uses Google Cloud Storage and DynamoDB to store and retrieve page image files and other data.
     This uses the default credentials that are automatically configured when you deploy an application in some Google
@@ -22,7 +25,7 @@ class CloudStorageFileSystem(FileSystem):
         super().__init__(base_path)
         self.in_cloud = in_cloud
         self.bucket_name = bucket_name
-        self.storage_client, _ = self.create_cloud_storage_client()
+        self.storage_client, self.signing_credentials = self.create_cloud_storage_client()
 
     def create_cloud_storage_client(self) -> tuple:
         """
@@ -109,7 +112,7 @@ class CloudStorageFileSystem(FileSystem):
 
     def save_image(self, kb_id: str, doc_id: str, file_name: str, file: any) -> None:
         """
-        Upload the file to S3
+        Upload the file to Cloud Storage
         """
         file_name = f"{kb_id}/{doc_id}/{file_name}"
         buffer = io.BytesIO()
@@ -251,7 +254,7 @@ class CloudStorageFileSystem(FileSystem):
         return base_dict
 
     def load_data(self, kb_id: str, doc_id: str, data_name: str) -> Optional[dict]:
-        """Load JSON data from a file in S3"""
+        """Load JSON data from a file in Cloud Storage"""
         filename = f"{kb_id}/{doc_id}/{data_name}.json"
         bucket = self.storage_client.bucket(self.bucket_name)
 
@@ -264,3 +267,61 @@ class CloudStorageFileSystem(FileSystem):
         except Exception as e:
             print(f"Error loading data from Cloud Storage: {str(e)}")
             return None
+
+    def __create_storage_client(self):
+        if env.IN_CLOUD:
+            credentials, _ = default()
+            auth_request = requests.Request()
+            credentials.refresh(auth_request)
+            _signing_credentials = compute_engine.IDTokenCredentials(
+                auth_request, "", service_account_email=credentials.service_account_email
+            )
+        else:
+            credentials = None
+            _signing_credentials = None
+
+        _storage_client = storage.Client(credentials=credentials)
+        return _storage_client, _signing_credentials
+
+    def generate_signed_url(self, metadata: dict, method: str = "GET", max_file_size: int = 10000000) -> dict:
+        _bucket = metadata.get("bucket")
+        _file_path = metadata.get("file_path")
+
+        if not _bucket or not _file_path:
+            return {"url": "not available", "headers": None}
+
+        try:
+            bucket = self.storage_client.bucket(_bucket)
+            blob = bucket.blob(_file_path)
+            headers = None
+
+            if method == "PUT":
+                headers = {
+                    "x-goog-content-length-range": f"0,{max_file_size}",
+                    "Content-Type": mime_utils.guess_type(_file_path)[0],
+                }
+
+            url = blob.generate_signed_url(
+                version="v4",
+                credentials=self.signing_credentials,
+                expiration=datetime.timedelta(minutes=env.SIGNED_URL_EXPIRATION_TIME),
+                method=method,
+                headers=headers,
+            )
+            return {"url": url, "headers": headers}
+
+        except Exception as e:
+            print(f"Exception - Generate Signed URL: {str(e)}")
+            return {"url": "not available", "headers": None}
+
+    def generate_download_url(self, kb_id: str, doc_id: str, file_name: str) -> dict:
+        file_name = f"{kb_id}/{doc_id}/{file_name}"
+        metadata = {"bucket": self.bucket_name, "file_path": file_name}
+        upload_url = self.generate_signed_url(metadata)
+        return {"path": file_name, "upload_url": upload_url}
+
+    def generate_upload_url(self, kb_id: str, doc_id: str, file_name: str, max_file_size: int = 10000000) -> dict:
+        file_name = f"{kb_id}/{doc_id}/{file_name}"
+        metadata = {"bucket": self.bucket_name, "file_path": file_name}
+        download_url = self.generate_signed_url(metadata, method="PUT", max_file_size=max_file_size)
+        return {"path": file_name, "upload_url": download_url}

@@ -5,6 +5,7 @@ from pathlib import Path
 from pdf2image import convert_from_path
 
 from integrations.dsparse.file_parsing.cloud_storage_file_system import CloudStorageFileSystem
+from integrations.utils import env
 
 
 class TestCloudStorageFileSystem(unittest.TestCase):
@@ -12,11 +13,11 @@ class TestCloudStorageFileSystem(unittest.TestCase):
     @classmethod
     def setUpClass(self):
         self.kb_id = "test_kb"
-        self.doc_id = "test_doc"
+        self.doc_id = "test_doc.pdf"
         self.base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../data/dsparse_file_system_test'))
         self.cloud_storage_fs = CloudStorageFileSystem(
             base_path=self.base_path,
-            bucket_name=os.environ["BUCKET_NAME"]
+            bucket_name=env.DB_NAME
         )
 
     def test__001_create_directory(self):
@@ -94,6 +95,28 @@ class TestCloudStorageFileSystem(unittest.TestCase):
         objects_deleted = self.cloud_storage_fs.delete_kb(self.kb_id)
         self.assertTrue(len(objects_deleted) == 1)
         self.assertTrue(objects_deleted[0]['key'] == f"{self.kb_id}/{self.doc_id}/page_0.jpg")
+
+    def test__008_generate_upload_url(self):
+        result = self.cloud_storage_fs.generate_upload_url(self.kb_id, self.doc_id, self.doc_id)
+        headers = {
+            "x-goog-content-length-range": "0,10000000",
+            "Content-Type": "application/pdf",
+            "Host": "storage.googleapis.com"
+        }
+
+        self.assertIsNotNone(result['upload_url'])
+        self.assertIsNotNone(result['upload_url']['url'])
+        self.assertEqual(result['upload_url']['headers'], headers)
+        self.assertEqual(result['path'], f"{self.kb_id}/{self.doc_id}/{self.doc_id}")
+
+    def test__008_generate_download_url(self):
+        result = self.cloud_storage_fs.generate_download_url(self.kb_id, self.doc_id, self.doc_id)
+        headers = None
+
+        self.assertIsNotNone(result['upload_url'])
+        self.assertIsNotNone(result['upload_url']['url'])
+        self.assertEqual(result['upload_url']['headers'], headers)
+        self.assertEqual(result['path'], f"{self.kb_id}/{self.doc_id}/{self.doc_id}")
 
     @classmethod
     def tearDownClass(self):
