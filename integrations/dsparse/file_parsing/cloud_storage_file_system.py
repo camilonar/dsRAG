@@ -318,7 +318,7 @@ class CloudStorageFileSystem(FileSystem, CloudFileSystem):
         file_path = f"{kb_id}/{doc_id}/{file_name}"
         metadata = {"bucket": self.bucket_name, "file_path": file_path}
         upload_url = self.generate_signed_url(metadata)
-        return {"path": file_path, "upload_url": upload_url}
+        return {"path": file_path, "download_url": upload_url}
 
     def generate_upload_url(self, kb_id: str, doc_id: str, file_name: str, max_file_size: int = 10000000) -> dict:
         file_path = f"{kb_id}/{doc_id}/{file_name}"

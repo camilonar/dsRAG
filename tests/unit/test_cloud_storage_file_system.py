@@ -113,9 +113,9 @@ class TestCloudStorageFileSystem(unittest.TestCase):
         result = self.cloud_storage_fs.generate_download_url(self.kb_id, self.doc_id, self.doc_id)
         headers = None
 
-        self.assertIsNotNone(result['upload_url'])
-        self.assertIsNotNone(result['upload_url']['url'])
-        self.assertEqual(result['upload_url']['headers'], headers)
+        self.assertIsNotNone(result['download_url'])
+        self.assertIsNotNone(result['download_url']['url'])
+        self.assertEqual(result['download_url']['headers'], headers)
         self.assertEqual(result['path'], f"{self.kb_id}/{self.doc_id}/{self.doc_id}")
 
     @classmethod
