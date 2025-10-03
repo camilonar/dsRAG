@@ -12,15 +12,15 @@ class MetadataStorage(ABC):
         pass
 
     @abstractmethod
-    def load(self) -> dict:
+    def load(self, kb_id: str) -> dict:
         pass
 
     @abstractmethod
-    def save(self, kb: dict) -> None:
+    def save(self, full_data: dict, kb_id: str) -> None:
         pass
 
     @abstractmethod
-    def delete(self) -> None:
+    def delete(self, kb_id: str) -> None:
         pass
 
 class LocalMetadataStorage(MetadataStorage):

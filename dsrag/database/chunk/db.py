@@ -105,6 +105,13 @@ class ChunkDB(ABC):
         pass
 
     @abstractmethod
+    def doc_id_exists(self, doc_id: str) -> bool:
+        """
+        Indicates if a doc_id exists in the database or not..
+        """
+        pass
+
+    @abstractmethod
     def delete(self) -> None:
         """
         Delete the chunk database.

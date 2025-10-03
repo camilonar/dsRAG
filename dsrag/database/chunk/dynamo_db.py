@@ -524,6 +524,10 @@ class DynamoDB(ChunkDB):
 
         return len(doc_ids)
 
+    def doc_id_exists(self, doc_id: str) -> bool:
+        # Basic and non-optimal implementation
+        return doc_id in self.get_all_doc_ids()
+
     def get_total_num_characters(self) -> int:
         # Not super feasible to calculate this in DynamoDB
         pass
