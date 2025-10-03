@@ -1,15 +1,12 @@
 from abc import ABC, abstractmethod
 
 
-class UrlSigner(ABC):
+class CloudFileSystem(ABC):
     """
-    Interface that defines operations to sign URLs. This is useful for Cloud
-    Storage systems (e.g. Google Cloud Storage, Amazon S3)
+    Interface that defines operations such as signing URLs and downloading files that are exclusive to
+    cloud file systems. This is useful for Cloud Storage systems (e.g. Google Cloud Storage, Amazon S3)
     """
     subclasses = {}
-
-    def __init__(self, bucket_name: str):
-        self.bucket_name = bucket_name
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -21,7 +18,7 @@ class UrlSigner(ABC):
         }
 
     @classmethod
-    def from_dict(cls, config) -> "UrlSigner":
+    def from_dict(cls, config) -> "CloudFileSystem":
         subclass_name = config.pop(
             "subclass_name", None
         )  # Remove subclass_name from config
@@ -56,4 +53,8 @@ class UrlSigner(ABC):
 
     @abstractmethod
     def generate_upload_url(self, kb_id: str, doc_id: str, file_name: str, max_file_size: int = 10000000) -> dict:
+        pass
+
+    @abstractmethod
+    def download_to_disk(self, kb_id: str, doc_id: str, file_name: str) -> str:
         pass

@@ -10,10 +10,10 @@ from google.cloud import storage
 
 from dsrag.dsparse.file_parsing.file_system import FileSystem
 from integrations.utils import env, mime_utils
-from integrations.utils.url_signer import UrlSigner
+from integrations.utils.cloud_file_system import CloudFileSystem
 
 
-class CloudStorageFileSystem(FileSystem, UrlSigner):
+class CloudStorageFileSystem(FileSystem, CloudFileSystem):
     """
     Uses Google Cloud Storage and DynamoDB to store and retrieve page image files and other data.
     This uses the default credentials that are automatically configured when you deploy an application in some Google
@@ -315,13 +315,27 @@ class CloudStorageFileSystem(FileSystem, UrlSigner):
             return {"url": "not available", "headers": None}
 
     def generate_download_url(self, kb_id: str, doc_id: str, file_name: str) -> dict:
-        file_name = f"{kb_id}/{doc_id}/{file_name}"
-        metadata = {"bucket": self.bucket_name, "file_path": file_name}
+        file_path = f"{kb_id}/{doc_id}/{file_name}"
+        metadata = {"bucket": self.bucket_name, "file_path": file_path}
         upload_url = self.generate_signed_url(metadata)
-        return {"path": file_name, "upload_url": upload_url}
+        return {"path": file_path, "upload_url": upload_url}
 
     def generate_upload_url(self, kb_id: str, doc_id: str, file_name: str, max_file_size: int = 10000000) -> dict:
-        file_name = f"{kb_id}/{doc_id}/{file_name}"
-        metadata = {"bucket": self.bucket_name, "file_path": file_name}
+        file_path = f"{kb_id}/{doc_id}/{file_name}"
+        metadata = {"bucket": self.bucket_name, "file_path": file_path}
         download_url = self.generate_signed_url(metadata, method="PUT", max_file_size=max_file_size)
-        return {"path": file_name, "upload_url": download_url}
+        return {"path": file_path, "upload_url": download_url}
+
+    def download_to_disk(self, kb_id: str, doc_id: str, file_name: str) -> str:
+        file_path = f"{kb_id}/{doc_id}/{file_name}"
+        bucket = self.storage_client.bucket(self.bucket_name)
+        blob = bucket.blob(file_path)
+
+        output_folder = os.path.join(self.base_path, kb_id, doc_id)
+        os.makedirs(output_folder, exist_ok=True)
+
+        file_path = os.path.join(self.base_path, file_path)
+
+        blob.download_to_filename(file_path)
+
+        return file_path

@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter
 
 from integrations.utils import env, kb_creation
@@ -17,11 +19,17 @@ async def search(q: str) -> list[dict]:
     return results
 
 @router.post("/docs")
-async def add_document(doc_id: str, file_path: str) -> dict:
+async def add_document(doc_id: str) -> dict:
     """
     Adds a document to the Knowledge Base
     """
+    file_path = file_system.download_to_disk(env.KB_NAME, doc_id, doc_id)
+
     kb.add_document(doc_id=doc_id, file_path=file_path)
+
+    if os.path.exists(file_path):
+       os.remove(file_path)
+
     return {"detail": "Document added."}
 
 @router.get("/docs/upload")
