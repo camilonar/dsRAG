@@ -1,11 +1,30 @@
 from typing import Optional
 
 import numpy as np
+from bson import Binary
+from bson.binary import BinaryVectorDtype
 
 from dsrag.database.vector import VectorDB
-from dsrag.database.vector.types import MetadataFilter, VectorSearchResult
+from dsrag.database.vector.types import MetadataFilter, VectorSearchResult, MetadataFilters
 from integrations.database.mongo import MongoCrud
 from integrations.utils.async_utils import sync
+
+def format_metadata_filters(metadata_filters: MetadataFilters) -> dict:
+    filters = metadata_filters["filters"]
+    operator = metadata_filters["operator"]
+    if operator == "and":
+        result = {"$and": []}
+        ref = result["$and"]
+    elif operator == "or":
+        result = {"$or": []}
+        ref = result["$or"]
+    else:
+        raise ValueError(f"Unsupported operator: {operator}")
+
+    for filter in filters:
+        ref.append(format_metadata_filter(filter))
+
+    return result
 
 
 def format_metadata_filter(metadata_filter: MetadataFilter) -> dict:
@@ -58,6 +77,10 @@ class MongoAtlasDB(VectorDB):
             index_name = self.collection_name + "_vector_index"
         self.index_name = index_name
 
+    @staticmethod
+    def generate_bson_vector(vector:  list[int] | list[float], vector_dtype: BinaryVectorDtype):
+        return Binary.from_vector(vector, vector_dtype)
+
     def add_vectors(self, vectors: list, metadata: list):
         # Convert NumPy arrays to lists
         vectors_as_lists = [vector.tolist() if isinstance(vector, np.ndarray) else vector for vector in vectors]
@@ -68,11 +91,9 @@ class MongoAtlasDB(VectorDB):
                 "Error in add_vectors: the number of vectors and metadata items must be the same."
             )
 
-        # Make sure each value in the vectors is a float and not an int
-        for vector in vectors_as_lists:
-            for i, value in enumerate(vector):
-                if isinstance(value, int):
-                    vector[i] = float(value)
+        # Generate BSON vector from the float32 embeddings
+        vectors_as_lists = [self.generate_bson_vector(vector, BinaryVectorDtype.FLOAT32)
+                            for vector in vectors_as_lists]
 
         # create unique ids for each vector
         ids = [f"{meta['doc_id']}_{meta['chunk_index']}" for meta in metadata]
@@ -112,15 +133,19 @@ class MongoAtlasDB(VectorDB):
         query = {'metadata.doc_id': doc_id}
         sync(self.mongo_db.delete(self.collection_name, query))
 
-    def search(self, query_vector, top_k: int = 10, metadata_filter: Optional[MetadataFilter] = None) -> list[
+    def search(self, query_vector, top_k: int = 10, metadata_filter: Optional[MetadataFilter | MetadataFilters] = None) -> list[
         VectorSearchResult]:
         # Convert the query vector to a list if it is a NumPy array
         if isinstance(query_vector, np.ndarray):
             query_vector = query_vector.tolist()
         if isinstance(query_vector[0], list):
             query_vector = query_vector[0] # Unpack the vector
+
         if metadata_filter:
-            formatted_metadata_filter = format_metadata_filter(metadata_filter)
+            if "filters" in metadata_filter:
+                formatted_metadata_filter = format_metadata_filters(metadata_filter)
+            else:
+                formatted_metadata_filter = format_metadata_filter(metadata_filter)
             search_results = sync(self.mongo_db.search_by_embedding(self.collection_name, self.index_name, "embeddings",
                                               embedding=query_vector, top_k=top_k, _filter=formatted_metadata_filter))
         else:

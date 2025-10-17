@@ -83,6 +83,8 @@ class KnowledgeBase:
         self.storage_directory = os.path.expanduser(storage_directory)
         self.metadata_storage = metadata_storage if metadata_storage else LocalMetadataStorage(self.storage_directory)
 
+        if not self.kb_metadata:
+            self.kb_metadata = {}
         if save_metadata_to_disk:
             # load the KB if it exists; otherwise, initialize it and save it to disk
             if self.metadata_storage.kb_exists(self.kb_id) and exists_ok:
@@ -96,7 +98,7 @@ class KnowledgeBase:
                 )
             else:
                 created_time = int(time.time())
-                self.kb_metadata = {
+                self.kb_metadata |= {
                     "title": title,
                     "description": description,
                     "language": language,
@@ -108,7 +110,7 @@ class KnowledgeBase:
                 )
                 self._save()  # save the config for the KB to disk
         else:
-            self.kb_metadata = {
+            self.kb_metadata |= {
                 "title": title,
                 "description": description,
                 "language": language,

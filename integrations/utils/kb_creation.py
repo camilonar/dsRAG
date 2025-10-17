@@ -6,11 +6,12 @@ from dsrag.reranker import VoyageReranker
 from integrations.database.chunk.mongo_db import MongoDB
 from integrations.database.vector.mongo_atlas_db import MongoAtlasDB
 from integrations.dsparse.file_parsing.cloud_storage_file_system import CloudStorageFileSystem
+from integrations.flex_knowledge_base import FlexKnowledgeBase
 from integrations.mongo_metadata import MongoDBMetadataStorage
 from integrations.utils import env
 
 
-def create_kb(kb_id: str, metadata_storage: MetadataStorage) -> KnowledgeBase:
+def create_kb(kb_id: str, metadata_storage: MetadataStorage, mandatory_metadata: dict) -> KnowledgeBase:
     vector_db = MongoAtlasDB(db_name=env.DB_NAME, kb_id=kb_id, uri=env.MONGODB_URI, dimension=env.EMBEDDING_MODEL_DIM)
     chunk_db = MongoDB(db_name=env.DB_NAME, kb_id=kb_id, uri=env.MONGODB_URI)
     embedding = VoyageAIEmbedding(model=env.EMBEDDING_MODEL, dimension=env.EMBEDDING_MODEL_DIM)
@@ -18,9 +19,9 @@ def create_kb(kb_id: str, metadata_storage: MetadataStorage) -> KnowledgeBase:
     llm = OpenAIChatAPI(model=env.LLM_MODEL)
     file_system = create_file_system()
 
-    kb = KnowledgeBase(kb_id=kb_id, vector_db=vector_db, chunk_db=chunk_db, embedding_model=embedding,
+    kb = FlexKnowledgeBase(kb_id=kb_id, vector_db=vector_db, chunk_db=chunk_db, embedding_model=embedding,
                        reranker=reranker, file_system=file_system, metadata_storage=metadata_storage,
-                       auto_context_model=llm, language=env.KB_LANGUAGE)
+                       auto_context_model=llm, language=env.KB_LANGUAGE, mandatory_metadata=mandatory_metadata)
     return kb
 
 def create_file_system():
@@ -28,7 +29,7 @@ def create_file_system():
     return file_system
 
 def __load_kb(kb_id: str, metadata_storage: MetadataStorage) -> KnowledgeBase:
-    kb = KnowledgeBase(kb_id=kb_id, metadata_storage=metadata_storage)
+    kb = FlexKnowledgeBase(kb_id=kb_id, metadata_storage=metadata_storage)
     return kb
 
 def load_kb(kb_id: str) -> KnowledgeBase:

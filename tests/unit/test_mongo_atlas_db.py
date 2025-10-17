@@ -65,6 +65,24 @@ class TestMongoAtlasDB(unittest.TestCase):
         self.assertEqual(results[0]["metadata"]["doc_id"], "1")
         self.assertEqual(results[1]["metadata"]["doc_id"], "2")
 
+    def test__002_search_with_metadata_filters(self):
+        query_vector = np.array([[1, 0]])
+        metadata_filters = {"filters": [{"field": "doc_id", "operator": "equals", "value": "1"},
+                                        {"field": "chunk_header", "operator": "equals", "value": "Header1"}],
+                            "operator": "and"}
+        results = self.db.search(query_vector, top_k=4, metadata_filter=metadata_filters)
+
+        print ("results", results)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["metadata"]["doc_id"], "1")
+
+        # Test with empty results
+        metadata_filters = {"filters": [{"field": "doc_id", "operator": "equals", "value": "1"},
+                                        {"field": "chunk_header", "operator": "equals", "value": "Header2"}],
+                            "operator": "and"}
+        results = self.db.search(query_vector, top_k=4, metadata_filter=metadata_filters)
+        self.assertEqual(len(results), 0)
+
     def test__003_remove_document(self):
         self.db.remove_document("1")
         time.sleep(1)

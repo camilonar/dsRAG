@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from integrations.routers import knowledge_router
+from integrations.web.routers import knowledge_router
 
 app = FastAPI()
 

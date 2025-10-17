@@ -1,8 +1,9 @@
 import os
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Body
 
 from integrations.utils import env, kb_creation
+from integrations.web.dto.knowledge_validator import AddDocumentModel
 
 router = APIRouter(prefix="/api/v1/knowledge", tags=["Knowledge"])
 
@@ -19,13 +20,21 @@ async def search(q: str) -> list[dict]:
     return results
 
 @router.post("/docs")
-async def add_document(doc_id: str) -> dict:
+async def add_document(doc_id: str, is_local: bool = False, data: AddDocumentModel = Body(...)) -> dict:
     """
     Adds a document to the Knowledge Base
-    """
-    file_path = file_system.download_to_disk(env.KB_NAME, doc_id, doc_id)
 
-    kb.add_document(doc_id=doc_id, file_path=file_path)
+    :param doc_id: the ID of the document
+    :param data: additional data of the document
+    :param is_local: indicates if the file is already on the local system, which means that the downloading step
+    can be skipped
+    """
+    if not is_local:
+        file_path = file_system.download_to_disk(env.KB_NAME, doc_id, doc_id)
+    else:
+        file_path = f"{env.KB_NAME}/{doc_id}/{doc_id}"
+
+    kb.add_document(doc_id=doc_id, file_path=file_path, metadata=data.metadata)
 
     if os.path.exists(file_path):
        os.remove(file_path)
