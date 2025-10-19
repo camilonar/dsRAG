@@ -9,18 +9,14 @@ from integrations.utils.async_utils import sync
 
 class MongoDB(ChunkDB):
 
-    def doc_id_exists(self, doc_id: str) -> bool:
-        query = {'doc_id': doc_id}
-        projection = {'doc_id': 1}
-        item = sync(self.mongo_db.read(self.collection_name, query, projection))
-
-        return True if item else False
-
-    def __init__(self, db_name: str, kb_id: str, uri: str, collection_name: str = None) -> None:
+    def __init__(self, db_name: str, kb_id: str, uri: str, collection_name: str = None,
+                 mandatory_metadata: Optional[dict] = {}) -> None:
         self.db_name = db_name
         self.kb_id = kb_id
         self.uri = uri
         self.mongo_db = MongoCrud(uri=uri, db_name=self.db_name)
+        self.mandatory_metadata = mandatory_metadata
+
         if collection_name is not None:
             self.collection_name = collection_name
         else:
@@ -45,6 +41,17 @@ class MongoDB(ChunkDB):
         - `created_on` (String) or (Number) depending on your timestamp format
         - `metadata` (String) or (Map)
         """
+
+    def format_query(self, query: dict):
+        formatted_metadata = {"metadata." + f: v for f, v in self.mandatory_metadata.items()}
+        return query | formatted_metadata
+
+    def doc_id_exists(self, doc_id: str) -> bool:
+        query = self.format_query({'doc_id': doc_id})
+        projection = {'doc_id': 1}
+        item = sync(self.mongo_db.read(self.collection_name, query, projection))
+
+        return True if item else False
 
     def add_document(self, doc_id: str, chunks: dict[int, dict[str, Any]], supp_id: str = "",
                      metadata: dict = {}) -> None:
@@ -96,7 +103,7 @@ class MongoDB(ChunkDB):
                 item = {k: v for k, v in item.items() if v not in [None, '', []]}
 
                 # Write the item to MongoDB (if the item exists then update the existing register)
-                query = {'doc_id': doc_id, 'chunk_index': float(str(chunk_index))}
+                query = self.format_query({'doc_id': doc_id, 'chunk_index': float(str(chunk_index))})
                 projection = {'_id': 1}
                 db_item = sync(self.mongo_db.read(self.collection_name, query, projection))
 
@@ -112,7 +119,7 @@ class MongoDB(ChunkDB):
 
 
     def remove_document(self, doc_id: str) -> None:
-        query = {'doc_id': doc_id}
+        query = self.format_query({'doc_id': doc_id})
         sync(self.mongo_db.bulk_delete(self.collection_name, query))
 
     def get_document(self, doc_id: str, include_content: bool = False) -> Optional[FormattedDocument]:
@@ -123,7 +130,7 @@ class MongoDB(ChunkDB):
 
         try:
             # Query the table for all items with the given doc_id
-            query = {'doc_id': doc_id}
+            query = self.format_query({'doc_id': doc_id})
             items = sync(self.mongo_db.list_by_query(self.collection_name, query, projection=projection))
 
             # If no items found, return None
@@ -180,7 +187,7 @@ class MongoDB(ChunkDB):
             return None
 
     def get_chunk_text(self, doc_id: str, chunk_index: int) -> Optional[str]:
-        query = {'doc_id': doc_id, 'chunk_index': chunk_index}
+        query = self.format_query({'doc_id': doc_id, 'chunk_index': chunk_index})
         projection = {'chunk_text': 1}
         item = sync(self.mongo_db.read(self.collection_name, query, projection))
 
@@ -191,7 +198,7 @@ class MongoDB(ChunkDB):
 
     def get_is_visual(self, doc_id: str, chunk_index: int) -> Optional[bool]:
         # Get the 'is_visual' attribute for the given doc_id and chunk_index
-        query = {'doc_id': doc_id, 'chunk_index': chunk_index}
+        query = self.format_query({'doc_id': doc_id, 'chunk_index': chunk_index})
         projection = {'is_visual': 1}
         item = sync(self.mongo_db.read(self.collection_name, query, projection))
 
@@ -202,7 +209,7 @@ class MongoDB(ChunkDB):
 
     def get_chunk_page_numbers(self, doc_id: str, chunk_index: int) -> tuple[Optional[int], Optional[int]]:
         # Get the chunk page start and end
-        query = {'doc_id': doc_id, 'chunk_index': chunk_index}
+        query = self.format_query({'doc_id': doc_id, 'chunk_index': chunk_index})
         projection = {'chunk_page_start': 1, 'chunk_page_end': 1, '_id': 0}
         item = sync(self.mongo_db.read(self.collection_name, query, projection))
 
@@ -215,7 +222,7 @@ class MongoDB(ChunkDB):
             return None, None
 
     def get_document_title(self, doc_id: str, chunk_index: int) -> Optional[str]:
-        query = {'doc_id': doc_id, 'chunk_index': chunk_index}
+        query = self.format_query({'doc_id': doc_id, 'chunk_index': chunk_index})
         projection = {'document_title': 1}
         item = sync(self.mongo_db.read(self.collection_name, query, projection))
 
@@ -225,7 +232,7 @@ class MongoDB(ChunkDB):
             return None
 
     def get_document_summary(self, doc_id: str, chunk_index: int) -> Optional[str]:
-        query = {'doc_id': doc_id, 'chunk_index': chunk_index}
+        query = self.format_query({'doc_id': doc_id, 'chunk_index': chunk_index})
         projection = {'document_summary': 1}
         item = sync(self.mongo_db.read(self.collection_name, query, projection))
 
@@ -235,7 +242,7 @@ class MongoDB(ChunkDB):
             return None
 
     def get_section_title(self, doc_id: str, chunk_index: int) -> Optional[str]:
-        query = {'doc_id': doc_id, 'chunk_index': chunk_index}
+        query = self.format_query({'doc_id': doc_id, 'chunk_index': chunk_index})
         projection = {'section_title': 1}
         item = sync(self.mongo_db.read(self.collection_name, query, projection))
 
@@ -245,7 +252,7 @@ class MongoDB(ChunkDB):
             return None
 
     def get_section_summary(self, doc_id: str, chunk_index: int) -> Optional[str]:
-        query = {'doc_id': doc_id, 'chunk_index': chunk_index}
+        query = self.format_query({'doc_id': doc_id, 'chunk_index': chunk_index})
         projection = {'section_summary': 1}
         item = sync(self.mongo_db.read(self.collection_name, query, projection))
 
@@ -255,7 +262,7 @@ class MongoDB(ChunkDB):
             return None
 
     def get_all_doc_ids(self, supp_id: Optional[str] = None) -> list[str]:
-        query = {'supp_id': supp_id}
+        query = self.format_query({'supp_id': supp_id})
         projection = {'doc_id': 1}
 
         try:
@@ -273,6 +280,7 @@ class MongoDB(ChunkDB):
 
     def get_total_num_characters(self) -> int:
         pipeline = [
+            {'$match': self.format_query({})},
             {'$group': {
                 '_id': None,
                 'total': {
@@ -288,8 +296,12 @@ class MongoDB(ChunkDB):
             return 0
 
     def delete(self) -> None:
-        # Delete the MongoDB collection
-        self.mongo_db.drop(self.collection_name)
+        # Only delete the MongoDB collection if there is no mandatory_metadata, otherwise only delete the documents
+        if not self.mandatory_metadata:
+            self.mongo_db.drop(self.collection_name)
+        else:
+            query = self.format_query({})
+            sync(self.mongo_db.bulk_delete(self.collection_name, query))
 
     def to_dict(self) -> dict[str, str]:
         return {

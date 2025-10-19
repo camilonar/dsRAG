@@ -44,12 +44,20 @@ class OpenAIChatAPI(LLM):
             client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"], base_url=base_url)
         else:
             client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=chat_messages,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-        )
+
+        if "gpt-5" in self.model:
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=chat_messages,
+                max_completion_tokens=self.max_tokens
+            )
+        else:
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=chat_messages,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+            )
         llm_output = response.choices[0].message.content.strip()
         return llm_output
     
