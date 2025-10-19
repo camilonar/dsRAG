@@ -24,6 +24,8 @@ def format_metadata_filters(metadata_filters: MetadataFilters) -> dict:
     for filter in filters:
         ref.append(format_metadata_filter(filter))
 
+    if not ref:
+        return {}
     return result
 
 
@@ -58,13 +60,14 @@ class MongoAtlasDB(VectorDB):
     """
 
     def __init__(self, db_name: str, kb_id: str, uri: str, dimension: int, collection_name: str = None,
-                 index_name: str = None, metric: str = "cosine") -> None:
+                 index_name: str = None, metric: str = "cosine", mandatory_metadata: Optional[dict] = {}) -> None:
         self.db_name = db_name
         self.kb_id = kb_id
         self.uri = uri
         self.dimension = dimension
         self.metric = metric
         self.mongo_db = MongoCrud(uri=uri, db_name=self.db_name)
+        self.mandatory_metadata = mandatory_metadata
 
         if collection_name is not None:
             self.collection_name = collection_name
@@ -76,6 +79,10 @@ class MongoAtlasDB(VectorDB):
         if not index_name:
             index_name = self.collection_name + "_vector_index"
         self.index_name = index_name
+
+    def format_query(self, query: dict):
+        formatted_metadata = {"metadata." + f: v for f, v in self.mandatory_metadata.items()}
+        return query | formatted_metadata
 
     @staticmethod
     def generate_bson_vector(vector:  list[int] | list[float], vector_dtype: BinaryVectorDtype):
@@ -91,8 +98,12 @@ class MongoAtlasDB(VectorDB):
                 "Error in add_vectors: the number of vectors and metadata items must be the same."
             )
 
-        # Generate BSON vector from the float32 embeddings
-        vectors_as_lists = [self.generate_bson_vector(vector, BinaryVectorDtype.FLOAT32)
+        # Generate BSON vector from the float32 or int8 embeddings. Assume all vectors are of the same type
+        if isinstance(vectors_as_lists[0][0], int):
+            dtype = BinaryVectorDtype.INT8
+        else:
+            dtype = BinaryVectorDtype.FLOAT32
+        vectors_as_lists = [self.generate_bson_vector(vector, dtype)
                             for vector in vectors_as_lists]
 
         # create unique ids for each vector
@@ -104,7 +115,7 @@ class MongoAtlasDB(VectorDB):
 
         # Insert the vectors into the database
         for v in vectors_to_upsert:
-            query = {'v_id': v["v_id"]}
+            query = self.format_query({'v_id': v["v_id"]})
             projection = {'_id': 1}
             db_item = sync(self.mongo_db.read(self.collection_name, query, projection))
 
@@ -127,10 +138,11 @@ class MongoAtlasDB(VectorDB):
 
 
     def get_num_vectors(self):
-        return sync(self.mongo_db.count_by_query(self.collection_name, {}))
+        query = self.format_query({})
+        return sync(self.mongo_db.count_by_query(self.collection_name, query))
 
     def remove_document(self, doc_id: str):
-        query = {'metadata.doc_id': doc_id}
+        query = self.format_query({'metadata.doc_id': doc_id})
         sync(self.mongo_db.delete(self.collection_name, query))
 
     def search(self, query_vector, top_k: int = 10, metadata_filter: Optional[MetadataFilter | MetadataFilters] = None) -> list[
@@ -171,10 +183,12 @@ class MongoAtlasDB(VectorDB):
         return results
 
     def delete(self):
-        """
-        WARNING: This will permanently delete the collection, index and all associated data.
-        """
-        self.mongo_db.drop(self.collection_name)
+        # Only delete the MongoDB collection if there is no mandatory_metadata, otherwise only delete the documents
+        if not self.mandatory_metadata:
+            self.mongo_db.drop(self.collection_name)
+        else:
+            query = self.format_query({})
+            sync(self.mongo_db.bulk_delete(self.collection_name, query))
 
     def to_dict(self) -> dict[str, str]:
         return {

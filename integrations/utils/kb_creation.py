@@ -10,11 +10,15 @@ from integrations.flex_knowledge_base import FlexKnowledgeBase
 from integrations.mongo_metadata import MongoDBMetadataStorage
 from integrations.utils import env
 
+main_ms = MongoDBMetadataStorage(db_name=env.DB_NAME, uri=env.MONGODB_URI, collection_name=env.KB_COLLECTION_NAME)
 
-def create_kb(kb_id: str, metadata_storage: MetadataStorage, mandatory_metadata: dict) -> KnowledgeBase:
-    vector_db = MongoAtlasDB(db_name=env.DB_NAME, kb_id=kb_id, uri=env.MONGODB_URI, dimension=env.EMBEDDING_MODEL_DIM)
-    chunk_db = MongoDB(db_name=env.DB_NAME, kb_id=kb_id, uri=env.MONGODB_URI)
-    embedding = VoyageAIEmbedding(model=env.EMBEDDING_MODEL, dimension=env.EMBEDDING_MODEL_DIM)
+def __create_kb(kb_id: str, metadata_storage: MetadataStorage, mandatory_metadata: dict) -> KnowledgeBase:
+    base_name = env.KB_NAME if not kb_id or kb_id == env.KB_NAME else f"{env.KB_NAME}_local"
+    vector_db = MongoAtlasDB(db_name=env.DB_NAME, kb_id=kb_id, uri=env.MONGODB_URI, dimension=env.EMBEDDING_MODEL_DIM,
+                             collection_name=f"{base_name}_vector")
+    chunk_db = MongoDB(db_name=env.DB_NAME, kb_id=kb_id, uri=env.MONGODB_URI, collection_name=f"{base_name}_chunks")
+    embedding = VoyageAIEmbedding(model=env.EMBEDDING_MODEL, dimension=env.EMBEDDING_MODEL_DIM,
+                                  output_dtype=env.EMBEDDING_MODEL_TYPE)
     reranker = VoyageReranker(model=env.RERANKER_MODEL)
     llm = OpenAIChatAPI(model=env.LLM_MODEL)
     file_system = create_file_system()
@@ -33,6 +37,15 @@ def __load_kb(kb_id: str, metadata_storage: MetadataStorage) -> KnowledgeBase:
     return kb
 
 def load_kb(kb_id: str) -> KnowledgeBase:
-    main_ms = MongoDBMetadataStorage(db_name=env.DB_NAME, uri=env.MONGODB_URI, collection_name=env.KB_COLLECTION_NAME)
     kb = __load_kb(kb_id, main_ms)
     return kb
+
+def create_kb(kb_id: str, mandatory_metadata: dict) -> KnowledgeBase:
+    kb = __create_kb(kb_id, main_ms, mandatory_metadata)
+    return kb
+
+def load_or_create(kb_id: str, mandatory_metadata: dict) -> KnowledgeBase:
+    if main_ms.kb_exists(kb_id):
+        return load_kb(kb_id)
+    else:
+        return create_kb(kb_id, mandatory_metadata)

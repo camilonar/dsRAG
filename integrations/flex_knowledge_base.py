@@ -68,6 +68,8 @@ class FlexKnowledgeBase(KnowledgeBase):
         super().__init__(kb_id, title, supp_id, description, language, storage_directory, embedding_model,
             reranker, auto_context_model, vector_db, chunk_db, file_system, exists_ok, save_metadata_to_disk,
             metadata_storage)
+        self.vector_db.mandatory_metadata = self.kb_metadata["mandatory_metadata"]
+        self.chunk_db.mandatory_metadata = self.kb_metadata["mandatory_metadata"]
 
     def add_document(
             self,
