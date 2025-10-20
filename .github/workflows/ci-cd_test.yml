@@ -57,5 +57,5 @@ jobs:
         uses: google-github-actions/deploy-cloudrun@main
         with:
           region: ${{ env.REGION }}
-          service: ${{ env.SERVICE_NAME_TEST }}
+          service: ${{ env.SERVICE_NAME }}
           image: ${{ env.GAR_LOCATION }}
