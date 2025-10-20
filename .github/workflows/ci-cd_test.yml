@@ -8,8 +8,8 @@ on:
 env:
   REGION: ${{ secrets.GCP_REGION }} # Cloud Run zone
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID_TEST }} # GCP project
-  SERVICE_NAME: ${{ secrets.GCP_SERVICE_NAME }} # Cloud run service name
-  GAR_LOCATION: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_TEST }}/${{ secrets.GCP_SERVICE_NAME }}/${{ secrets.GCP_SERVICE_NAME }}
+  SERVICE_NAME: ${{ secrets.GCP_SERVICE_NAME_TEST }} # Cloud run service name
+  GAR_LOCATION: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_TEST }}/${{ secrets.GCP_SERVICE_NAME_TEST }}/${{ secrets.GCP_SERVICE_NAME_TEST }}
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
@@ -57,5 +57,5 @@ jobs:
         uses: google-github-actions/deploy-cloudrun@main
         with:
           region: ${{ env.REGION }}
-          service: ${{ env.SERVICE_NAME }}
+          service: ${{ env.SERVICE_NAME_TEST }}
           image: ${{ env.GAR_LOCATION }}
