@@ -1,15 +1,15 @@
-name: GitHub CI/CD Cloudrun Test
+name: GitHub CI/CD Cloudrun Prod
 
 # Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the develop branch
+  # Triggers the workflow on push or pull request events but only for the prod branch
   push:
-    branches: [ develop ]
+    branches: [ prod ]
 env:
   REGION: ${{ secrets.GCP_REGION }} # Cloud Run zone
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID_TEST }} # GCP project
-  SERVICE_NAME: ${{ secrets.GCP_SERVICE_NAME_TEST }} # Cloud run service name
-  GAR_LOCATION: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_TEST }}/${{ secrets.GCP_SERVICE_NAME_TEST }}/${{ secrets.GCP_SERVICE_NAME_TEST }}
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID_PROD }} # GCP project
+  SERVICE_NAME: ${{ secrets.GCP_SERVICE_NAME_PROD }} # Cloud run service name
+  GAR_LOCATION: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_PROD }}/${{ secrets.GCP_SERVICE_NAME_PROD }}/${{ secrets.GCP_SERVICE_NAME_PROD }}
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
@@ -33,7 +33,7 @@ jobs:
       - id: "auth"
         uses: "google-github-actions/auth@v1"
         with:
-          credentials_json: "${{ secrets.GCP_SA_KEY_TEST }}"
+          credentials_json: "${{ secrets.GCP_SA_KEY_PROD }}"
 
       - name: "Set up Cloud SDK"
         uses: "google-github-actions/setup-gcloud@v1"
@@ -57,5 +57,5 @@ jobs:
         uses: google-github-actions/deploy-cloudrun@main
         with:
           region: ${{ env.REGION }}
-          service: ${{ env.SERVICE_NAME_TEST }}
+          service: ${{ env.SERVICE_NAME_PROD }}
           image: ${{ env.GAR_LOCATION }}
