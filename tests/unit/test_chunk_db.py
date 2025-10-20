@@ -121,6 +121,21 @@ class TestChunkDB(unittest.TestCase):
         summary = db.get_section_summary(doc_id, 0)
         self.assertEqual(summary, "Summary 1")
 
+    def test__doc_id_exists(self):
+        db = BasicChunkDB(self.kb_id, self.storage_directory)
+        doc_id = "doc3"
+        chunks = {
+            0: {"chunk_text": "Content of chunk 3"},
+        }
+        db.add_document(doc_id=doc_id, chunks=chunks)
+
+        # The document should exist
+        doc_id_exists = db.doc_id_exists("doc3")
+        self.assertEqual(doc_id_exists, True)
+        # The document should NOT exist
+        doc_id_exists = db.doc_id_exists("doc4")
+        self.assertEqual(doc_id_exists, False)
+
     def test__remove_document(self):
         db = BasicChunkDB(self.kb_id, self.storage_directory)
         doc_id = "doc1"
@@ -299,6 +314,21 @@ class TestSQLiteDB(unittest.TestCase):
         # There should only be one document with the supp_id 'Supp ID 1'
         self.assertEqual(len(docs), 1)
 
+    def test__doc_id_exists(self):
+        db = SQLiteDB(self.kb_id, self.storage_directory)
+        doc_id = "doc3"
+        chunks = {
+            0: {"chunk_text": "Content of chunk 3"},
+        }
+        db.add_document(doc_id=doc_id, chunks=chunks)
+
+        # The document should exist
+        doc_id_exists = db.doc_id_exists("doc3")
+        self.assertEqual(doc_id_exists, True)
+        # The document should NOT exist
+        doc_id_exists = db.doc_id_exists("doc4")
+        self.assertEqual(doc_id_exists, False)
+
     def test__remove_document(self):
         db = SQLiteDB(self.kb_id, self.storage_directory)
         doc_id = "doc1"
@@ -455,6 +485,20 @@ class TestDynamoDB(unittest.TestCase):
         # There should only be one document with the supp_id 'Supp ID 1'
         self.assertEqual(len(docs), 1)
 
+    def test__doc_id_exists(self):
+        doc_id = "doc3"
+        chunks = {
+            0: {"chunk_text": "Content of chunk 3"},
+        }
+        self.db.add_document(doc_id=doc_id, chunks=chunks)
+
+        # The document should exist
+        doc_id_exists = self.db.doc_id_exists("doc3")
+        self.assertEqual(doc_id_exists, True)
+        # The document should NOT exist
+        doc_id_exists = self.db.doc_id_exists("doc4")
+        self.assertEqual(doc_id_exists, False)
+
     def test__remove_document(self):
         doc_id = "doc1"
         chunks = {0: {"chunk_text": "Content of chunk 1"}}
@@ -563,19 +607,34 @@ class TestPostgresChunkDB(unittest.TestCase):
         # There should only be one document with the supp_id 'Supp ID 1'
         self.assertEqual(len(docs), 1)
 
-    def test__009_remove_document(self):
+    def test__010_doc_id_exists(self):
+        doc_id = "doc3"
+        chunks = {
+            0: {"chunk_text": "Content of chunk 3"},
+        }
+        self.db.add_document(doc_id=doc_id, chunks=chunks)
+
+        # The document should exist
+        doc_id_exists = self.db.doc_id_exists("doc3")
+        self.assertEqual(doc_id_exists, True)
+        # The document should NOT exist
+        doc_id_exists = self.db.doc_id_exists("doc4")
+        self.assertEqual(doc_id_exists, False)
+
+
+    def test__011_remove_document(self):
         self.db.remove_document(self.doc_id)
         results = self.db.get_document(self.doc_id)
         # Make sure the document does not exist, it should just be None
         self.assertIsNone(results)
 
-    def test__010_save_and_load_from_dict(self):
+    def test__012_save_and_load_from_dict(self):
         config = self.db.to_dict()
         db2 = PostgresChunkDB.from_dict(config)
         assert db2.kb_id == self.db.kb_id, "Failed to load kb_id from dict."
         self.assertEqual(db2.kb_id, self.db.kb_id)
 
-    def test__011_delete(self):
+    def test__013_delete(self):
         self.db.delete()
         try:
             _ = self.db.get_all_doc_ids()

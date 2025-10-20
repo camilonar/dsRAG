@@ -1,0 +1,61 @@
+name: GitHub CI/CD Cloudrun Prod
+
+# Controls when the workflow will run
+on:
+  # Triggers the workflow on push or pull request events but only for the prod branch
+  push:
+    branches: [ prod ]
+env:
+  REGION: ${{ secrets.GCP_REGION }} # Cloud Run zone
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID_PROD }} # GCP project
+  SERVICE_NAME: ${{ secrets.GCP_SERVICE_NAME_PROD }} # Cloud run service name
+  GAR_LOCATION: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_PROD }}/${{ secrets.GCP_SERVICE_NAME_PROD }}/${{ secrets.GCP_SERVICE_NAME_PROD }}
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "test-build-deploy"
+  test-build-deploy:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+    # Environment for deployment
+    environment:
+          name: 'Testing'
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - id: "auth"
+        uses: "google-github-actions/auth@v1"
+        with:
+          credentials_json: "${{ secrets.GCP_SA_KEY_PROD }}"
+
+      - name: "Set up Cloud SDK"
+        uses: "google-github-actions/setup-gcloud@v1"
+
+      - name: "Use gcloud CLI"
+        run: "gcloud info"
+      
+      - name: "Docker auth"
+        run: |-
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build image
+        run: docker build . --file Dockerfile --tag ${{ env.GAR_LOCATION }}
+        working-directory: .
+
+      - name: Push image
+        run: docker push ${{ env.GAR_LOCATION }}
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@main
+        with:
+          region: ${{ env.REGION }}
+          service: ${{ env.SERVICE_NAME }}
+          image: ${{ env.GAR_LOCATION }}

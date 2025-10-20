@@ -83,6 +83,8 @@ class KnowledgeBase:
         self.storage_directory = os.path.expanduser(storage_directory)
         self.metadata_storage = metadata_storage if metadata_storage else LocalMetadataStorage(self.storage_directory)
 
+        if not self.kb_metadata:
+            self.kb_metadata = {}
         if save_metadata_to_disk:
             # load the KB if it exists; otherwise, initialize it and save it to disk
             if self.metadata_storage.kb_exists(self.kb_id) and exists_ok:
@@ -96,7 +98,7 @@ class KnowledgeBase:
                 )
             else:
                 created_time = int(time.time())
-                self.kb_metadata = {
+                self.kb_metadata |= {
                     "title": title,
                     "description": description,
                     "language": language,
@@ -108,7 +110,7 @@ class KnowledgeBase:
                 )
                 self._save()  # save the config for the KB to disk
         else:
-            self.kb_metadata = {
+            self.kb_metadata |= {
                 "title": title,
                 "description": description,
                 "language": language,
@@ -427,7 +429,7 @@ class KnowledgeBase:
                 raise ValueError("Either text or file_path must be provided")
 
             # verify that the document does not already exist in the KB - the doc_id should be unique
-            if doc_id in self.chunk_db.get_all_doc_ids():
+            if self.chunk_db.doc_id_exists(doc_id):
                 ingestion_logger.warning(
                     "Document already exists in knowledge base, skipping", 
                     extra=base_extra
@@ -757,13 +759,20 @@ class KnowledgeBase:
 
         Internal method for parallel query execution.
         """
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(self._search, query, 200, metadata_filter) for query in search_queries]
+        if self.vector_db.is_async():
             all_ranked_results = []
-            for future in futures:
-                ranked_results = future.result()
+            for query in search_queries:
+                ranked_results = self._search(query, 20, metadata_filter)
                 all_ranked_results.append(ranked_results)
-        return all_ranked_results
+            return all_ranked_results
+        else:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [executor.submit(self._search, query, 200, metadata_filter) for query in search_queries]
+                all_ranked_results = []
+                for future in futures:
+                    ranked_results = future.result()
+                    all_ranked_results.append(ranked_results)
+            return all_ranked_results
     
     def _get_segment_page_numbers(self, doc_id: str, chunk_start: int, chunk_end: int) -> tuple:
         """Get page numbers for a segment.

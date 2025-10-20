@@ -116,9 +116,11 @@ class CohereEmbedding(Embedding):
 
 
 class VoyageAIEmbedding(Embedding):
-    def __init__(self, model: str = "voyage-large-2", dimension: Optional[int] = None):
+    def __init__(self, model: str = "voyage-large-2", dimension: Optional[int] = None,
+                 output_dtype: Optional[str] = None):
         super().__init__()
         self.model = model
+        self.output_dtype = output_dtype
         self.client = voyageai.Client()
 
         # Set dimension if not provided
@@ -137,12 +139,13 @@ class VoyageAIEmbedding(Embedding):
             texts=[text] if isinstance(text, str) else text,
             model=self.model,
             input_type=input_type,
+            output_dtype=self.output_dtype
         )
         return response.embeddings[0] if isinstance(text, str) else response.embeddings
 
     def to_dict(self):
         base_dict = super().to_dict()
-        base_dict.update({"model": self.model})
+        base_dict.update({"model": self.model, "output_dtype": self.output_dtype})
         return base_dict
 
 
