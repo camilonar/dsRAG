@@ -79,6 +79,7 @@ class KnowledgeBase:
         Raises:
             ValueError: If KB exists and exists_ok is False.
         """
+        self.backward_compatible = False # Change to True if you need backward compatible keys
         self.kb_id = kb_id
         self.storage_directory = os.path.expanduser(storage_directory)
         self.metadata_storage = metadata_storage if metadata_storage else LocalMetadataStorage(self.storage_directory)
@@ -788,7 +789,7 @@ class KnowledgeBase:
 
         Internal method for content retrieval.
         """
-        assert return_mode in ["text", "page_images", "dynamic"]
+        assert return_mode in ["text", "page_images", "dynamic", "simplified_text"]
 
         if return_mode == "dynamic":
             # loop through the chunks in the segment to see if any of them are visual
@@ -810,7 +811,14 @@ class KnowledgeBase:
             for chunk_index in range(chunk_start, chunk_end):
                 chunk_text = self._get_chunk_text(doc_id, chunk_index) or ""
                 segment_text += chunk_text
-            return segment_text.strip()
+            return {"content": segment_text.strip()}
+        elif return_mode == "simplified_text":
+            header_text = f"{self._get_segment_header(doc_id=doc_id, chunk_index=chunk_start)}"  # initialize the segment with the segment header
+            segment_text = ""
+            for chunk_index in range(chunk_start, chunk_end):
+                chunk_text = self._get_chunk_text(doc_id, chunk_index) or ""
+                segment_text += chunk_text
+            return {"header": header_text.strip(), "content": segment_text.strip()}
         else:
             # get the page numbers that the segment starts and ends on
             start_page_number, end_page_number = self._get_segment_page_numbers(doc_id, chunk_start, chunk_end)
@@ -1052,7 +1060,7 @@ class KnowledgeBase:
 
             # retrieve the content for each of the segments
             for segment_info in relevant_segment_info:
-                segment_info["content"] = self._get_segment_content_from_database(
+                segment_info |= self._get_segment_content_from_database(
                     segment_info["doc_id"],
                     segment_info["chunk_start"],
                     segment_info["chunk_end"],
@@ -1066,15 +1074,16 @@ class KnowledgeBase:
                 segment_info["segment_page_start"] = start_page_number
                 segment_info["segment_page_end"] = end_page_number
 
-                # Deprecated keys, but needed for backwards compatibility
-                segment_info["chunk_page_start"] = start_page_number
-                segment_info["chunk_page_end"] = end_page_number
+                if self.backward_compatible:
+                    # Deprecated keys, but needed for backwards compatibility
+                    segment_info["chunk_page_start"] = start_page_number
+                    segment_info["chunk_page_end"] = end_page_number
 
-                # Backwards compatibility, where previously the content was stored in the "text" key
-                if type(segment_info["content"]) == str:
-                    segment_info["text"] = segment_info["content"]
-                else:
-                    segment_info["text"] = ""
+                    # Backwards compatibility, where previously the content was stored in the "text" key
+                    if type(segment_info["content"]) == str:
+                        segment_info["text"] = segment_info["content"]
+                    else:
+                        segment_info["text"] = ""
             
             step_duration = time.perf_counter() - step_start_time
             
