@@ -23,7 +23,7 @@ async def search(q: str, kb_id: Optional[str] = None) -> list[dict]:
     """
     search_queries = [q]
     kb = _create_or_retrieve_kb(kb_id)
-    results = kb.query(search_queries)
+    results = kb.query(search_queries, return_mode="simplified_text")
 
     return results
 
