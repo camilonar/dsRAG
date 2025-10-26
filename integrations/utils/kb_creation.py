@@ -29,7 +29,7 @@ def __create_kb(kb_id: str, metadata_storage: MetadataStorage, mandatory_metadat
     return kb
 
 def create_file_system():
-    file_system = CloudStorageFileSystem(base_path="/tmp", bucket_name=env.DB_NAME, in_cloud=env.IN_CLOUD)
+    file_system = CloudStorageFileSystem(base_path="/tmp", bucket_name=env.BUCKET_NAME, in_cloud=env.IN_CLOUD)
     return file_system
 
 def __load_kb(kb_id: str, metadata_storage: MetadataStorage) -> KnowledgeBase:
