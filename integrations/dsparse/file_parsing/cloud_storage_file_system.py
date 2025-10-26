@@ -27,6 +27,10 @@ class CloudStorageFileSystem(FileSystem, CloudFileSystem):
         self.bucket_name = bucket_name
         self.storage_client, self.signing_credentials = self.create_cloud_storage_client()
 
+    @staticmethod
+    def format_doc_id_folder(doc_id: str) -> str:
+        return doc_id.split(".")[0]
+
     def create_cloud_storage_client(self) -> tuple:
         """
         Creates and authenticates the client to connect to Cloud Storage.
@@ -57,7 +61,7 @@ class CloudStorageFileSystem(FileSystem, CloudFileSystem):
         Delete the directory in Cloud Storage. Used when deleting a document.
         """
 
-        prefix = f"{kb_id}/{doc_id}/"
+        prefix = f"{kb_id}/{self.format_doc_id_folder(doc_id)}/"
 
         # List all objects with the specified prefix
         blobs = self.storage_client.list_blobs(bucket_or_name=self.bucket_name, prefix=prefix)
@@ -105,7 +109,7 @@ class CloudStorageFileSystem(FileSystem, CloudFileSystem):
         Save the JSON file to Cloud Storage
         """
 
-        file_name = f"{kb_id}/{doc_id}/{file_name}"
+        file_name = f"{kb_id}/{self.format_doc_id_folder(doc_id)}/{file_name}"
         json_data = json.dumps(file, indent=2)  # Serialize the JSON data
 
         self.save_bytes(file_name, json_data, 'application/json')
@@ -114,7 +118,7 @@ class CloudStorageFileSystem(FileSystem, CloudFileSystem):
         """
         Upload the file to Cloud Storage
         """
-        file_name = f"{kb_id}/{doc_id}/{file_name}"
+        file_name = f"{kb_id}/{self.format_doc_id_folder(doc_id)}/{file_name}"
         buffer = io.BytesIO()
         file.save(buffer, format='JPEG')
         buffer.seek(0)  # Rewind the buffer to the beginning
@@ -127,7 +131,6 @@ class CloudStorageFileSystem(FileSystem, CloudFileSystem):
         - page_start: int - the starting page number
         - page_end: int - the ending page number (inclusive)
         """
-        # TODO change so that it doesnt need to create folders when downloading (download in memory)
         if page_start is None or page_end is None:
             return []
 
@@ -138,7 +141,7 @@ class CloudStorageFileSystem(FileSystem, CloudFileSystem):
         for i in range(page_start, page_end + 1):
             found_file = False
             for ext in ['.jpg', '.jpeg', '.png']:  # Try in order of preference
-                filename = f"{kb_id}/{doc_id}/page_{i}{ext}"
+                filename = f"{kb_id}/{self.format_doc_id_folder(doc_id)}/page_{i}{ext}"
                 output_folder = os.path.join(self.base_path, kb_id, doc_id)
                 if not os.path.exists(output_folder):
                     try:
@@ -174,8 +177,7 @@ class CloudStorageFileSystem(FileSystem, CloudFileSystem):
         Returns:
             List[str]: Sorted list of local file paths for the downloaded images
         """
-        # TODO change so that it doesnt need to create folders when downloading (download in memory)
-        prefix = f"{kb_id}/{doc_id}/"
+        prefix = f"{kb_id}/{self.format_doc_id_folder(doc_id)}/"
 
         try:
             # List all objects with the specified prefix
@@ -216,14 +218,14 @@ class CloudStorageFileSystem(FileSystem, CloudFileSystem):
 
     def save_page_content(self, kb_id: str, doc_id: str, page_number: int, content: str) -> None:
         """Save the text content of a page to Cloud Storage"""
-        file_name = f"{kb_id}/{doc_id}/page_content_{page_number}.json"
+        file_name = f"{kb_id}/{self.format_doc_id_folder(doc_id)}/page_content_{page_number}.json"
         data = json.dumps({"content": content})
 
         self.save_bytes(file_name, data, content_type='application/json')
 
     def load_page_content(self, kb_id: str, doc_id: str, page_number: int) -> Optional[str]:
         """Load the text content of a page from Cloud Storage"""
-        file_name = f"{kb_id}/{doc_id}/page_content_{page_number}.json"
+        file_name = f"{kb_id}/{self.format_doc_id_folder(doc_id)}/page_content_{page_number}.json"
         bucket = self.storage_client.bucket(self.bucket_name)
 
         try:
@@ -255,7 +257,7 @@ class CloudStorageFileSystem(FileSystem, CloudFileSystem):
 
     def load_data(self, kb_id: str, doc_id: str, data_name: str) -> Optional[dict]:
         """Load JSON data from a file in Cloud Storage"""
-        filename = f"{kb_id}/{doc_id}/{data_name}.json"
+        filename = f"{kb_id}/{self.format_doc_id_folder(doc_id)}/{data_name}.json"
         bucket = self.storage_client.bucket(self.bucket_name)
 
         try:
@@ -315,19 +317,19 @@ class CloudStorageFileSystem(FileSystem, CloudFileSystem):
             return {"url": "not available", "headers": None}
 
     def generate_download_url(self, kb_id: str, doc_id: str, file_name: str) -> dict:
-        file_path = f"{kb_id}/{doc_id}/{file_name}"
+        file_path = f"{kb_id}/{self.format_doc_id_folder(doc_id)}/{file_name}"
         metadata = {"bucket": self.bucket_name, "file_path": file_path}
         upload_url = self.generate_signed_url(metadata)
         return {"path": file_path, "download_url": upload_url}
 
     def generate_upload_url(self, kb_id: str, doc_id: str, file_name: str, max_file_size: int = 10000000) -> dict:
-        file_path = f"{kb_id}/{doc_id}/{file_name}"
+        file_path = f"{kb_id}/{self.format_doc_id_folder(doc_id)}/{file_name}"
         metadata = {"bucket": self.bucket_name, "file_path": file_path}
         download_url = self.generate_signed_url(metadata, method="PUT", max_file_size=max_file_size)
         return {"path": file_path, "upload_url": download_url}
 
     def download_to_disk(self, kb_id: str, doc_id: str, file_name: str) -> str:
-        file_path = f"{kb_id}/{doc_id}/{file_name}"
+        file_path = f"{kb_id}/{self.format_doc_id_folder(doc_id)}/{file_name}"
         bucket = self.storage_client.bucket(self.bucket_name)
         blob = bucket.blob(file_path)
 

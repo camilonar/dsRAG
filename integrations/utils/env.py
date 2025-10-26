@@ -19,3 +19,4 @@ LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-nano")
 
 KB_LANGUAGE = os.getenv("KB_LANGUAGE", "es")
 KB_NAME = os.getenv("KB_NAME")
+BUCKET_NAME = os.getenv("BUCKET_NAME")
