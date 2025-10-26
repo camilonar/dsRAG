@@ -17,7 +17,7 @@ class TestCloudStorageFileSystem(unittest.TestCase):
         self.base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../data/dsparse_file_system_test'))
         self.cloud_storage_fs = CloudStorageFileSystem(
             base_path=self.base_path,
-            bucket_name=env.DB_NAME
+            bucket_name=env.BUCKET_NAME
         )
 
     def test__001_create_directory(self):
