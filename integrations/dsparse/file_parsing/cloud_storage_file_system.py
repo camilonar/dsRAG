@@ -329,7 +329,8 @@ class CloudStorageFileSystem(FileSystem, CloudFileSystem):
         return {"path": file_path, "upload_url": download_url}
 
     def download_to_disk(self, kb_id: str, doc_id: str, file_name: str) -> str:
-        file_path = f"{kb_id}/{self.format_doc_id_folder(doc_id)}/{file_name}"
+        doc_id = self.format_doc_id_folder(doc_id)
+        file_path = f"{kb_id}/{doc_id}/{file_name}"
         bucket = self.storage_client.bucket(self.bucket_name)
         blob = bucket.blob(file_path)
 
