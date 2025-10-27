@@ -39,12 +39,13 @@ async def add_document(doc_id: str, kb_id: Optional[str] = None, is_local: bool 
     :param is_local: indicates if the file is already on the local system, which means that the downloading step
     can be skipped
     """
+    kb_name = kb_id if kb_id else env.KB_NAME
     if not is_local:
-        file_path = file_system.download_to_disk(env.KB_NAME, doc_id, doc_id)
+        file_path = file_system.download_to_disk(kb_name, doc_id, doc_id)
     else:
-        file_path = f"{env.KB_NAME}/{doc_id}/{doc_id}"
+        file_path = f"{kb_name}/{doc_id}/{doc_id}"
 
-    kb = _create_or_retrieve_kb(kb_id)
+    kb = _create_or_retrieve_kb(kb_name)
     kb.add_document(doc_id=doc_id, file_path=file_path, metadata=data.metadata)
 
     if os.path.exists(file_path):
