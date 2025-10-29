@@ -29,7 +29,7 @@ class CloudStorageFileSystem(FileSystem, CloudFileSystem):
 
     @staticmethod
     def format_doc_id_folder(doc_id: str) -> str:
-        return doc_id.split(".")[0]
+        return doc_id.rsplit(".", 1)[0]
 
     def create_cloud_storage_client(self) -> tuple:
         """
