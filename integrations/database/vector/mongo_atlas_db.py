@@ -21,8 +21,8 @@ def format_metadata_filters(metadata_filters: MetadataFilters) -> dict:
     else:
         raise ValueError(f"Unsupported operator: {operator}")
 
-    for filter in filters:
-        ref.append(format_metadata_filter(filter))
+    for _filter in filters:
+        ref.append(format_metadata_filter(_filter))
 
     if not ref:
         return {}
