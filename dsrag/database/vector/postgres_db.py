@@ -124,13 +124,16 @@ class PostgresVectorDB(VectorDB):
             .format(sql.Literal(self.table_name))
         )
         exists = cur.fetchone()[0]
-        print("exists", exists)
+        if not exists:
+            print("exists", exists)
 
         # Create the table for this kb id if it doesn't exist
         if not exists:
+            creation_sql = "CREATE TABLE {} (id TEXT, kb_id TEXT, metadata JSONB, embedding vector(%s)," \
+                "PRIMARY KEY(id, kb_id))"
+
             cur.execute(
-                sql.SQL(
-                    "CREATE TABLE {} (id TEXT PRIMARY KEY, metadata JSONB, embedding vector(%s))")
+                sql.SQL(creation_sql)
                 .format(sql.Identifier(self.table_name)),
                 [vector_dimension]
             )
@@ -193,11 +196,18 @@ class PostgresVectorDB(VectorDB):
         # Create the ids from the doc_id and chunk_index
         ids = [
             f"{content['doc_id']}_{content['chunk_index']}" for content in metadata]
-        data_to_insert = [(id, json.dumps(content), embedding)
-                          for id, content, embedding in zip(ids, metadata, vectors)]
 
         from psycopg2 import sql
-        insert_sql = sql.SQL("INSERT INTO {} (id, metadata, embedding) VALUES (%s, %s, %s)").format(
+        if self.mandatory_metadata:
+            data_to_insert = [(_id, kb_id, json.dumps(content), embedding)
+                              for _id, kb_id, content, embedding in zip(ids, [self.kb_id for _ in range(len(ids))],
+                                                                metadata, vectors)]
+        else:
+            data_to_insert = [(_id, kb_id, json.dumps(content), embedding)
+                              for _id, kb_id, content, embedding in zip(ids, ["" for _ in range(len(ids))],
+                                                                        metadata, vectors)]
+
+        insert_sql = sql.SQL("INSERT INTO {} (id, kb_id, metadata, embedding) VALUES (%s, %s, %s, %s)").format(
             sql.Identifier(self.table_name)).as_string(cur)
 
         cur.executemany(insert_sql, data_to_insert)
@@ -245,10 +255,15 @@ class PostgresVectorDB(VectorDB):
         if metadata_filter:
             if "filters" in metadata_filter:
                 filter_expression = format_metadata_filters(metadata_filter)
+                filter_value = []
+                for f in metadata_filter["filters"]:
+                    if isinstance(f["value"], list):
+                        filter_value.extend(f["value"])
+                    else:
+                        filter_value.append(f["value"])
             else:
                 filter_expression = format_metadata_filter(metadata_filter)
-
-            filter_value = metadata_filter['value']
+                filter_value = metadata_filter['value']
 
             query = sql.SQL("""
                 SELECT metadata, embedding, 1 - (embedding <=> %s) AS cosine_similarity
@@ -328,5 +343,6 @@ class PostgresVectorDB(VectorDB):
             "database": self.database,
             "host": self.host,
             "port": self.port,
-            "vector_dimension": self.vector_dimension
+            "vector_dimension": self.vector_dimension,
+            "table_name": self.table_name
         }

@@ -23,10 +23,10 @@ def __create_kb(kb_id: str, metadata_storage: MetadataStorage, mandatory_metadat
         chunk_db = MongoDB(db_name=env.DB_NAME, kb_id=kb_id, uri=env.MONGODB_URI, collection_name=f"{base_name}_chunks")
     elif env.DB_ENGINE == "POSTGRES":
         vector_db = PostgresVectorDB(kb_id=kb_id, username=env.POSTGRES_USERNAME, password=env.POSTGRES_PASSWORD,
-                                     database=env.DB_NAME, host=env.POSTGRES_HOST, port=env.POSTGRES_PORT,
+                                     database=env.POSTGRES_DB_NAME, host=env.POSTGRES_HOST, port=env.POSTGRES_PORT,
                                      vector_dimension=env.EMBEDDING_MODEL_DIM, table_name=f"{base_name}_vector")
         chunk_db = PostgresChunkDB(kb_id=kb_id, username=env.POSTGRES_USERNAME, password=env.POSTGRES_PASSWORD,
-                                   database=env.DB_NAME, host=env.POSTGRES_HOST, port=env.POSTGRES_PORT,
+                                   database=env.POSTGRES_DB_NAME, host=env.POSTGRES_HOST, port=env.POSTGRES_PORT,
                                    table_name=f"{base_name}_chunks")
     else:
         raise ValueError(f"Unsupported DB Engine {env.DB_ENGINE}")
