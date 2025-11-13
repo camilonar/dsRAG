@@ -1,5 +1,8 @@
+import json
 import time
 from typing import Any, Optional
+
+from psycopg2._json import Json
 
 from dsrag.database.chunk.db import ChunkDB
 from dsrag.database.chunk.types import FormattedDocument
@@ -11,14 +14,22 @@ psycopg2 = LazyLoader("psycopg2", "psycopg2-binary")
 
 class PostgresChunkDB(ChunkDB):
 
-    def __init__(self, kb_id: str, username: str, password: str, database: str, host: str="localhost", port: int = 5432) -> None:
+    def __init__(self, kb_id: str, username: str, password: str, database: str, host: str="localhost", port: int = 5432,
+                 table_name: str = "", mandatory_metadata: dict = {}) -> None:
         self.kb_id = kb_id
         self.username = username
         self.password = password
         self.database = database
         self.host = host
         self.port = port
-        self.table_name = f"{kb_id}_documents"
+
+        if not table_name:
+            # Strip the kb of any spaces
+            kb_id = kb_id.replace(" ", "_")
+            self.table_name = f"{kb_id}_documents"
+        else:
+            self.table_name = table_name
+        self.mandatory_metadata = mandatory_metadata
 
         self.columns = [
             {"name": "doc_id", "type": "TEXT"},
@@ -34,7 +45,7 @@ class PostgresChunkDB(ChunkDB):
             {"name": "is_visual", "type": "BOOLEAN"},
             {"name": "created_on", "type": "TEXT"},
             {"name": "supp_id", "type": "TEXT"},
-            {"name": "metadata", "type": "TEXT"},
+            {"name": "metadata", "type": "JSONB"},
         ]
 
         # Create a table for this kb_id if it doesn't exist
@@ -68,6 +79,10 @@ class PostgresChunkDB(ChunkDB):
                     cur.execute("ALTER TABLE {}_chunks ADD COLUMN {} {}".format(kb_id, column["name"], column["type"]))
         conn.close()
 
+    def format_query(self, query: dict) -> str:
+        # This method assumes the resulting dict is going to be used in a 'WHERE metadata @> %s' style query
+        return json.dumps(query | self.mandatory_metadata)
+
     def add_document(self, doc_id: str, chunks: dict[int, dict[str, Any]], supp_id: str = "", metadata: dict = {}) -> None:
         # Add the docs to the sqlite table
         conn = psycopg2.connect(
@@ -80,9 +95,6 @@ class PostgresChunkDB(ChunkDB):
         cur = conn.cursor()
         # Create a created on timestamp
         created_on = str(int(time.time()))
-
-        # Turn the metadata object into a string
-        metadata = str(metadata)
 
         # Get the data from the dictionary
         for chunk_index, chunk in chunks.items():
@@ -103,7 +115,7 @@ class PostgresChunkDB(ChunkDB):
                 'chunk_length': chunk_length,
                 'created_on': created_on,
                 'supp_id': supp_id,
-                'metadata': metadata
+                'metadata': Json(metadata)
             }
 
             # Generate the column names and placeholders
@@ -126,7 +138,8 @@ class PostgresChunkDB(ChunkDB):
             port=self.port
         )
         cur = conn.cursor()
-        cur.execute(f"DELETE FROM {self.table_name} WHERE doc_id='{doc_id}'")
+        metadata_query = self.format_query({})
+        cur.execute(f"DELETE FROM {self.table_name} WHERE doc_id='{doc_id}' AND metadata @> '{metadata_query}'")
         conn.commit()
         conn.close()
 
@@ -146,8 +159,9 @@ class PostgresChunkDB(ChunkDB):
         if include_content:
             columns += ["chunk_text", "chunk_index"]
 
+        metadata_query = self.format_query({})
         query_statement = (
-            f"SELECT {', '.join(columns)} FROM {self.table_name} WHERE doc_id='{doc_id}'"
+            f"SELECT {', '.join(columns)} FROM {self.table_name} WHERE doc_id='{doc_id}' AND metadata @> '{metadata_query}'"
         )
         cur.execute(query_statement)
         results = cur.fetchall()
@@ -196,9 +210,10 @@ class PostgresChunkDB(ChunkDB):
             host=self.host,
             port=self.port
         )
+        metadata_query = self.format_query({})
         cur = conn.cursor()
         cur.execute(
-            f"SELECT chunk_text FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index}"
+            f"SELECT chunk_text FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
         )
         result = cur.fetchone()
         conn.close()
@@ -216,8 +231,9 @@ class PostgresChunkDB(ChunkDB):
             port=self.port
         )
         cur = conn.cursor()
+        metadata_query = self.format_query({})
         cur.execute(
-            f"SELECT is_visual FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index}"
+            f"SELECT is_visual FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
         )
         result = cur.fetchone()
         conn.close()
@@ -235,8 +251,9 @@ class PostgresChunkDB(ChunkDB):
             port=self.port
         )
         cur = conn.cursor()
+        metadata_query = self.format_query({})
         cur.execute(
-            f"SELECT chunk_page_start, chunk_page_end FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index}"
+            f"SELECT chunk_page_start, chunk_page_end FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
         )
         result = cur.fetchone()
         conn.close()
@@ -254,8 +271,9 @@ class PostgresChunkDB(ChunkDB):
             port=self.port
         )
         cur = conn.cursor()
+        metadata_query = self.format_query({})
         cur.execute(
-            f"SELECT document_title FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index}"
+            f"SELECT document_title FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
         )
         result = cur.fetchone()
         conn.close()
@@ -273,8 +291,9 @@ class PostgresChunkDB(ChunkDB):
             port=self.port
         )
         cur = conn.cursor()
+        metadata_query = self.format_query({})
         cur.execute(
-            f"SELECT document_summary FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index}"
+            f"SELECT document_summary FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
         )
         result = cur.fetchone()
         conn.close()
@@ -292,8 +311,9 @@ class PostgresChunkDB(ChunkDB):
             port=self.port
         )
         cur = conn.cursor()
+        metadata_query = self.format_query({})
         cur.execute(
-            f"SELECT section_title FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index}"
+            f"SELECT section_title FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
         )
         result = cur.fetchone()
         conn.close()
@@ -311,8 +331,9 @@ class PostgresChunkDB(ChunkDB):
             port=self.port
         )
         cur = conn.cursor()
+        metadata_query = self.format_query({})
         cur.execute(
-            f"SELECT section_summary FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index}"
+            f"SELECT section_summary FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
         )
         result = cur.fetchone()
         conn.close()
@@ -330,9 +351,10 @@ class PostgresChunkDB(ChunkDB):
             port=self.port
         )
         cur = conn.cursor()
-        query_statement = f"SELECT DISTINCT doc_id FROM {self.table_name}"
+        metadata_query = self.format_query({})
+        query_statement = f"SELECT DISTINCT doc_id FROM {self.table_name} WHERE metadata @> '{metadata_query}'"
         if supp_id:
-            query_statement += f" WHERE supp_id='{supp_id}'"
+            query_statement += f" AND supp_id='{supp_id}'"
         cur.execute(query_statement)
         results = cur.fetchall()
         conn.close()
@@ -348,7 +370,8 @@ class PostgresChunkDB(ChunkDB):
             port=self.port
         )
         cur = conn.cursor()
-        query_statement = f"SELECT DISTINCT doc_id FROM {self.table_name} WHERE doc_id='{doc_id}' LIMIT 1"
+        metadata_query = self.format_query({})
+        query_statement = f"SELECT DISTINCT doc_id FROM {self.table_name} WHERE doc_id='{doc_id}' AND metadata @> '{metadata_query}' LIMIT 1"
         cur.execute(query_statement)
         results = cur.fetchall()
         conn.close()
@@ -364,7 +387,8 @@ class PostgresChunkDB(ChunkDB):
             port=self.port
         )
         cur = conn.cursor()
-        cur.execute(f"SELECT COUNT(DISTINCT doc_id) FROM {self.table_name} ")
+        metadata_query = self.format_query({})
+        cur.execute(f"SELECT COUNT(DISTINCT doc_id) FROM {self.table_name} WHERE metadata @> '{metadata_query}'")
         result = cur.fetchone()
         conn.close()
         if result is None:
@@ -381,7 +405,8 @@ class PostgresChunkDB(ChunkDB):
             port=self.port
         )
         cur = conn.cursor()
-        cur.execute(f"SELECT SUM(chunk_length) FROM {self.table_name}")
+        metadata_query = self.format_query({})
+        cur.execute(f"SELECT SUM(chunk_length) FROM {self.table_name} WHERE metadata @> '{metadata_query}'")
         result = cur.fetchone()
         conn.close()
         if result is None or result[0] is None:
@@ -398,7 +423,16 @@ class PostgresChunkDB(ChunkDB):
             port=self.port
         )
         cur = conn.cursor()
-        cur.execute(f"DROP TABLE {self.table_name}")
+        if not self.mandatory_metadata:
+            cur.execute(f"DROP TABLE {self.table_name}")
+        else:
+            from psycopg2 import sql
+            condition = self.format_query({})
+            cur.execute(
+                sql.SQL(
+                    "DELETE FROM {} WHERE metadata @> %s").format(sql.Identifier(self.table_name)),
+                [condition]
+            )
         conn.commit()
         conn.close()
 
@@ -411,4 +445,5 @@ class PostgresChunkDB(ChunkDB):
             "database": self.database,
             "host": self.host,
             "port": self.port,
+            "table_name": self.table_name
         }

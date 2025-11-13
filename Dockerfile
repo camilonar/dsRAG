@@ -9,7 +9,7 @@ COPY . /app
 
 # Install specific dependencies from requirements.txt
 RUN pip install --no-cache-dir -r full_requirements.txt
-RUN pip install voyageai
+RUN pip install voyageai pgvector psycopg2-binary
 
 # Exposes the port where FastAPI will execute and listen for requests
 EXPOSE 8000
