@@ -82,7 +82,8 @@ def format_metadata_filter(metadata_filter: MetadataFilter) -> str:
 
 class PostgresVectorDB(VectorDB):
     def __init__(self, kb_id: str, username: str, password: str, database: str, host: str = "localhost", port: int = 5432,
-                 vector_dimension: int = 768, table_name: str = "", mandatory_metadata: Optional[dict] = {}):
+                 vector_dimension: int = 768, table_name: str = "", mandatory_metadata: Optional[dict] = {},
+                 ssl_mode: str = "require"):
         self.kb_id = kb_id
         if not table_name:
             # Strip the kb of any spaces
@@ -99,15 +100,17 @@ class PostgresVectorDB(VectorDB):
         self.port = port
         self.vector_dimension = vector_dimension
         self.mandatory_metadata = mandatory_metadata
+        self.connection_params = {
+            "dbname": database,
+            "user": username,
+            "password": password,
+            "host": host,
+            "port": port,
+            "sslmode": ssl_mode
+        }
 
         # Create the extension if it doesn't exist
-        conn = psycopg2.connect(
-            dbname=database,
-            user=username,
-            password=password,
-            host=host,
-            port=port
-        )
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         cur.execute('CREATE EXTENSION IF NOT EXISTS vector')
         conn.commit()
@@ -160,13 +163,7 @@ class PostgresVectorDB(VectorDB):
         return query | self.mandatory_metadata
 
     def get_num_vectors(self):
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        conn = psycopg2.connect(**self.connection_params)
 
         try:
             from psycopg2 import sql
@@ -183,13 +180,7 @@ class PostgresVectorDB(VectorDB):
 
     def add_vectors(self, vectors: Sequence[Vector], metadata: Sequence[ChunkMetadata]):
 
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
 
         vectors = np.array(vectors)
@@ -216,13 +207,7 @@ class PostgresVectorDB(VectorDB):
 
     def remove_document(self, doc_id):
 
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
 
         # Delete all vectors with the given doc_id
@@ -240,13 +225,7 @@ class PostgresVectorDB(VectorDB):
 
     def search(self, query_vector: list, top_k: int = 10, metadata_filter: Optional[MetadataFilter | MetadataFilters] = None):
 
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
 
         query_vector = np.array(query_vector)
@@ -311,13 +290,7 @@ class PostgresVectorDB(VectorDB):
 
     def delete(self):
         # Delete the table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        conn = psycopg2.connect(**self.connection_params)
 
         from psycopg2 import sql
         cur = conn.cursor()
