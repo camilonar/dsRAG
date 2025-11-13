@@ -15,13 +15,21 @@ psycopg2 = LazyLoader("psycopg2", "psycopg2-binary")
 class PostgresChunkDB(ChunkDB):
 
     def __init__(self, kb_id: str, username: str, password: str, database: str, host: str="localhost", port: int = 5432,
-                 table_name: str = "", mandatory_metadata: dict = {}) -> None:
+                 table_name: str = "", mandatory_metadata: dict = {}, ssl_mode: str = "require") -> None:
         self.kb_id = kb_id
         self.username = username
         self.password = password
         self.database = database
         self.host = host
         self.port = port
+        self.connection_params = {
+            "dbname": database,
+            "user": username,
+            "password": password,
+            "host": host,
+            "port": port,
+            "sslmode": ssl_mode
+        }
 
         if not table_name:
             # Strip the kb of any spaces
@@ -49,13 +57,7 @@ class PostgresChunkDB(ChunkDB):
         ]
 
         # Create a table for this kb_id if it doesn't exist
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         cur.execute(f"SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = '{self.table_name}')")
         exists = cur.fetchone()[0]
@@ -85,13 +87,7 @@ class PostgresChunkDB(ChunkDB):
 
     def add_document(self, doc_id: str, chunks: dict[int, dict[str, Any]], supp_id: str = "", metadata: dict = {}) -> None:
         # Add the docs to the sqlite table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         # Create a created on timestamp
         created_on = str(int(time.time()))
@@ -130,13 +126,7 @@ class PostgresChunkDB(ChunkDB):
 
     def remove_document(self, doc_id: str) -> None:
         # Remove the docs from the sqlite table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         metadata_query = self.format_query({})
         cur.execute(f"DELETE FROM {self.table_name} WHERE doc_id='{doc_id}' AND metadata @> '{metadata_query}'")
@@ -146,14 +136,8 @@ class PostgresChunkDB(ChunkDB):
     def get_document(
         self, doc_id: str, include_content: bool = False
     ) -> Optional[FormattedDocument]:
-        # Retrieve the document from the sqlite table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        # Retrieve the document from the Postgres table
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         columns = ["supp_id", "document_title", "document_summary", "created_on", "metadata"]
         if include_content:
@@ -202,14 +186,8 @@ class PostgresChunkDB(ChunkDB):
         )
 
     def get_chunk_text(self, doc_id: str, chunk_index: int) -> Optional[str]:
-        # Retrieve the chunk text from the sqlite table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        # Retrieve the chunk text from the Postgres table
+        conn = psycopg2.connect(**self.connection_params)
         metadata_query = self.format_query({})
         cur = conn.cursor()
         cur.execute(
@@ -222,14 +200,8 @@ class PostgresChunkDB(ChunkDB):
         return None
     
     def get_is_visual(self, doc_id: str, chunk_index: int) -> Optional[bool]:
-        # Retrieve the is_visual flag from the sqlite table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        # Retrieve the is_visual flag from the Postgres table
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         metadata_query = self.format_query({})
         cur.execute(
@@ -242,14 +214,8 @@ class PostgresChunkDB(ChunkDB):
         return None
     
     def get_chunk_page_numbers(self, doc_id: str, chunk_index: int) -> Optional[tuple[int, int]]:
-        # Retrieve the chunk page numbers from the sqlite table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        # Retrieve the chunk page numbers from the Postgres table
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         metadata_query = self.format_query({})
         cur.execute(
@@ -262,14 +228,8 @@ class PostgresChunkDB(ChunkDB):
         return None
 
     def get_document_title(self, doc_id: str, chunk_index: int) -> Optional[str]:
-        # Retrieve the document title from the sqlite table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        # Retrieve the document title from the Postgres table
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         metadata_query = self.format_query({})
         cur.execute(
@@ -282,14 +242,8 @@ class PostgresChunkDB(ChunkDB):
         return None
 
     def get_document_summary(self, doc_id: str, chunk_index: int) -> Optional[str]:
-        # Retrieve the document summary from the sqlite table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        # Retrieve the document summary from the Postgres table
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         metadata_query = self.format_query({})
         cur.execute(
@@ -302,14 +256,8 @@ class PostgresChunkDB(ChunkDB):
         return None
 
     def get_section_title(self, doc_id: str, chunk_index: int) -> Optional[str]:
-        # Retrieve the section title from the sqlite table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        # Retrieve the section title from the Postgres table
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         metadata_query = self.format_query({})
         cur.execute(
@@ -322,14 +270,8 @@ class PostgresChunkDB(ChunkDB):
         return None
 
     def get_section_summary(self, doc_id: str, chunk_index: int) -> Optional[str]:
-        # Retrieve the section summary from the sqlite table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        # Retrieve the section summary from the Postgres table
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         metadata_query = self.format_query({})
         cur.execute(
@@ -342,14 +284,8 @@ class PostgresChunkDB(ChunkDB):
         return None
 
     def get_all_doc_ids(self, supp_id: Optional[str] = None) -> list[str]:
-        # Retrieve all document IDs from the sqlite table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        # Retrieve all document IDs from the Postgres table
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         metadata_query = self.format_query({})
         query_statement = f"SELECT DISTINCT doc_id FROM {self.table_name} WHERE metadata @> '{metadata_query}'"
@@ -361,14 +297,8 @@ class PostgresChunkDB(ChunkDB):
         return [result[0] for result in results]
 
     def doc_id_exists(self, doc_id: str) -> bool:
-        # Retrieve all document IDs from the sqlite table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        # Retrieve all document IDs from the Postgres table
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         metadata_query = self.format_query({})
         query_statement = f"SELECT DISTINCT doc_id FROM {self.table_name} WHERE doc_id='{doc_id}' AND metadata @> '{metadata_query}' LIMIT 1"
@@ -378,14 +308,8 @@ class PostgresChunkDB(ChunkDB):
         return True if results else False
     
     def get_document_count(self) -> int:
-        # Retrieve the number of documents in the sqlite table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        # Retrieve the number of documents in the Postgres table
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         metadata_query = self.format_query({})
         cur.execute(f"SELECT COUNT(DISTINCT doc_id) FROM {self.table_name} WHERE metadata @> '{metadata_query}'")
@@ -396,14 +320,8 @@ class PostgresChunkDB(ChunkDB):
         return result[0]
 
     def get_total_num_characters(self) -> int:
-        # Retrieve the total number of characters in the sqlite table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        # Retrieve the total number of characters in the Postgres table
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         metadata_query = self.format_query({})
         cur.execute(f"SELECT SUM(chunk_length) FROM {self.table_name} WHERE metadata @> '{metadata_query}'")
@@ -414,14 +332,8 @@ class PostgresChunkDB(ChunkDB):
         return result[0]
 
     def delete(self) -> None:
-        # Delete the postgres table
-        conn = psycopg2.connect(
-            dbname=self.database,
-            user=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port
-        )
+        # Delete the Postgres table
+        conn = psycopg2.connect(**self.connection_params)
         cur = conn.cursor()
         if not self.mandatory_metadata:
             cur.execute(f"DROP TABLE {self.table_name}")
