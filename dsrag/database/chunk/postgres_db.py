@@ -1,3 +1,4 @@
+import json
 import time
 from typing import Any, Optional
 
@@ -11,14 +12,22 @@ psycopg2 = LazyLoader("psycopg2", "psycopg2-binary")
 
 class PostgresChunkDB(ChunkDB):
 
-    def __init__(self, kb_id: str, username: str, password: str, database: str, host: str="localhost", port: int = 5432) -> None:
+    def __init__(self, kb_id: str, username: str, password: str, database: str, host: str="localhost", port: int = 5432,
+                 table_name: str = "", mandatory_metadata: dict = {}) -> None:
         self.kb_id = kb_id
         self.username = username
         self.password = password
         self.database = database
         self.host = host
         self.port = port
-        self.table_name = f"{kb_id}_documents"
+
+        if not table_name:
+            # Strip the kb of any spaces
+            kb_id = kb_id.replace(" ", "_")
+            self.table_name = f"{kb_id}_documents"
+        else:
+            self.table_name = table_name
+        self.mandatory_metadata = mandatory_metadata
 
         self.columns = [
             {"name": "doc_id", "type": "TEXT"},
@@ -67,6 +76,10 @@ class PostgresChunkDB(ChunkDB):
                     # Add the column to the table
                     cur.execute("ALTER TABLE {}_chunks ADD COLUMN {} {}".format(kb_id, column["name"], column["type"]))
         conn.close()
+
+    def format_query(self, query: dict):
+        # This method assumes the resulting dict is going to be used in a 'WHERE metadata @> %s' style query
+        return query | self.mandatory_metadata
 
     def add_document(self, doc_id: str, chunks: dict[int, dict[str, Any]], supp_id: str = "", metadata: dict = {}) -> None:
         # Add the docs to the sqlite table
@@ -398,7 +411,16 @@ class PostgresChunkDB(ChunkDB):
             port=self.port
         )
         cur = conn.cursor()
-        cur.execute(f"DROP TABLE {self.table_name}")
+        if not self.mandatory_metadata:
+            cur.execute(f"DROP TABLE {self.table_name}")
+        else:
+            from psycopg2 import sql
+            condition = self.format_query({})
+            cur.execute(
+                sql.SQL(
+                    "DELETE FROM {} WHERE metadata @> %s").format(sql.Identifier(self.table_name)),
+                [json.dumps(condition)]
+            )
         conn.commit()
         conn.close()
 

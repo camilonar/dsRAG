@@ -1,3 +1,5 @@
+from dsrag.database.chunk.postgres_db import PostgresChunkDB
+from dsrag.database.vector.postgres_db import PostgresVectorDB
 from dsrag.embedding import VoyageAIEmbedding
 from dsrag.knowledge_base import KnowledgeBase
 from dsrag.llm import OpenAIChatAPI
@@ -14,9 +16,21 @@ main_ms = MongoDBMetadataStorage(db_name=env.DB_NAME, uri=env.MONGODB_URI, colle
 
 def __create_kb(kb_id: str, metadata_storage: MetadataStorage, mandatory_metadata: dict) -> KnowledgeBase:
     base_name = env.KB_NAME if not kb_id or kb_id == env.KB_NAME else f"{env.KB_NAME}_local"
-    vector_db = MongoAtlasDB(db_name=env.DB_NAME, kb_id=kb_id, uri=env.MONGODB_URI, dimension=env.EMBEDDING_MODEL_DIM,
+
+    if env.DB_ENGINE == "MONGO":
+        vector_db = MongoAtlasDB(db_name=env.DB_NAME, kb_id=kb_id, uri=env.MONGODB_URI, dimension=env.EMBEDDING_MODEL_DIM,
                              collection_name=f"{base_name}_vector")
-    chunk_db = MongoDB(db_name=env.DB_NAME, kb_id=kb_id, uri=env.MONGODB_URI, collection_name=f"{base_name}_chunks")
+        chunk_db = MongoDB(db_name=env.DB_NAME, kb_id=kb_id, uri=env.MONGODB_URI, collection_name=f"{base_name}_chunks")
+    elif env.DB_ENGINE == "POSTGRES":
+        vector_db = PostgresVectorDB(kb_id=kb_id, username=env.POSTGRES_USERNAME, password=env.POSTGRES_PASSWORD,
+                                     database=env.DB_NAME, host=env.POSTGRES_HOST, port=env.POSTGRES_PORT,
+                                     vector_dimension=env.EMBEDDING_MODEL_DIM, table_name=f"{base_name}_vector")
+        chunk_db = PostgresChunkDB(kb_id=kb_id, username=env.POSTGRES_USERNAME, password=env.POSTGRES_PASSWORD,
+                                   database=env.DB_NAME, host=env.POSTGRES_HOST, port=env.POSTGRES_PORT,
+                                   table_name=f"{base_name}_chunks")
+    else:
+        raise ValueError(f"Unsupported DB Engine {env.DB_ENGINE}")
+
     embedding = VoyageAIEmbedding(model=env.EMBEDDING_MODEL, dimension=env.EMBEDDING_MODEL_DIM,
                                   output_dtype=env.EMBEDDING_MODEL_TYPE)
     reranker = VoyageReranker(model=env.RERANKER_MODEL)

@@ -3,7 +3,7 @@ import json
 import numpy as np
 
 from dsrag.database.vector.db import VectorDB
-from dsrag.database.vector.types import VectorSearchResult, MetadataFilter, ChunkMetadata, Vector
+from dsrag.database.vector.types import VectorSearchResult, MetadataFilter, ChunkMetadata, Vector, MetadataFilters
 from dsrag.utils.imports import LazyLoader
 
 # Lazy load PostgreSQL dependencies
@@ -13,15 +13,32 @@ pgvector = LazyLoader("pgvector")
 # We'll import register_vector when needed to avoid immediate import
 
 
-def format_metadata_filter(metadata_filter: MetadataFilter) -> dict:
+def format_metadata_filters(metadata_filters: MetadataFilters) -> str:
+    filters = metadata_filters["filters"]
+    operator = metadata_filters["operator"]
+
+    formatted_filters = [format_metadata_filter(_filter) for _filter in filters]
+    if not formatted_filters:
+        return "TRUE"
+
+    if operator == "and":
+        result = " AND ".join(formatted_filters)
+    elif operator == "or":
+        result = " OR ".join(formatted_filters)
+    else:
+        raise ValueError(f"Unsupported operator: {operator}")
+
+    return result
+
+def format_metadata_filter(metadata_filter: MetadataFilter) -> str:
     """
-    Format the metadata filter to be used in the ChromaDB query method.
+    Format the metadata filter to be used in the PostgresSQL query method.
 
     Args:
         metadata_filter (dict): The metadata filter.
 
     Returns:
-        dict: The formatted metadata filter.
+        str: The formatted metadata filter.
     """
 
     field = metadata_filter['field']
@@ -64,16 +81,24 @@ def format_metadata_filter(metadata_filter: MetadataFilter) -> dict:
 
 
 class PostgresVectorDB(VectorDB):
-    def __init__(self, kb_id: str, username: str, password: str, database: str, host: str = "localhost", port: int = 5432, vector_dimension: int = 768):
+    def __init__(self, kb_id: str, username: str, password: str, database: str, host: str = "localhost", port: int = 5432,
+                 vector_dimension: int = 768, table_name: str = "", mandatory_metadata: Optional[dict] = {}):
         self.kb_id = kb_id
-        self.table_name = f'{kb_id}_vectors'
-        self.index_name = f'{kb_id}_embedding_index'
+        if not table_name:
+            # Strip the kb of any spaces
+            kb_id = kb_id.replace(" ", "_")
+            self.table_name = f'{kb_id}_vectors'
+        else:
+            self.table_name = table_name
+
+        self.index_name = f'{table_name}_embedding_index'
         self.username = username
         self.password = password
         self.database = database
         self.host = host
         self.port = port
         self.vector_dimension = vector_dimension
+        self.mandatory_metadata = mandatory_metadata
 
         # Create the extension if it doesn't exist
         conn = psycopg2.connect(
@@ -127,6 +152,10 @@ class PostgresVectorDB(VectorDB):
 
         conn.close()
 
+    def format_query(self, query: dict):
+        # This method assumes the resulting dict is going to be used in a 'WHERE metadata @> %s' style query
+        return query | self.mandatory_metadata
+
     def get_num_vectors(self):
         conn = psycopg2.connect(
             dbname=self.database,
@@ -140,8 +169,10 @@ class PostgresVectorDB(VectorDB):
             from psycopg2 import sql
 
             cur = conn.cursor()
+            condition = self.format_query({})
             cur.execute(
-                sql.SQL("SELECT COUNT(*) FROM {}").FORMAT(sql.Identifier(self.table_name)))
+                sql.SQL("SELECT COUNT(*) FROM {} WHERE metadata @> %s").FORMAT(sql.Identifier(self.table_name)),
+                [json.dumps(condition)])
             count = cur.fetchone()[0]
         finally:
             conn.close()
@@ -185,7 +216,7 @@ class PostgresVectorDB(VectorDB):
         cur = conn.cursor()
 
         # Delete all vectors with the given doc_id
-        condition = {"doc_id": doc_id}
+        condition = self.format_query({"doc_id": doc_id})
 
         from psycopg2 import sql
         cur.execute(
@@ -197,7 +228,7 @@ class PostgresVectorDB(VectorDB):
         conn.commit()
         conn.close()
 
-    def search(self, query_vector: list, top_k: int = 10, metadata_filter: Optional[MetadataFilter] = None):
+    def search(self, query_vector: list, top_k: int = 10, metadata_filter: Optional[MetadataFilter | MetadataFilters] = None):
 
         conn = psycopg2.connect(
             dbname=self.database,
@@ -210,11 +241,13 @@ class PostgresVectorDB(VectorDB):
 
         query_vector = np.array(query_vector)
 
-        if metadata_filter:
-            filter_expression = format_metadata_filter(metadata_filter)
-
         from psycopg2 import sql
         if metadata_filter:
+            if "filters" in metadata_filter:
+                filter_expression = format_metadata_filters(metadata_filter)
+            else:
+                filter_expression = format_metadata_filter(metadata_filter)
+
             filter_value = metadata_filter['value']
 
             query = sql.SQL("""
@@ -273,8 +306,16 @@ class PostgresVectorDB(VectorDB):
 
         from psycopg2 import sql
         cur = conn.cursor()
-        cur.execute(sql.SQL("DROP TABLE {}").format(
-            sql.Identifier(self.table_name)))
+        if not self.mandatory_metadata:
+            cur.execute(sql.SQL("DROP TABLE {}").format(
+                sql.Identifier(self.table_name)))
+        else:
+            condition = self.format_query({})
+            cur.execute(
+                sql.SQL(
+                    "DELETE FROM {} WHERE metadata @> %s").format(sql.Identifier(self.table_name)),
+                [json.dumps(condition)]
+            )
         conn.commit()
         conn.close()
 

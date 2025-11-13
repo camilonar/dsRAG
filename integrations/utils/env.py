@@ -7,9 +7,17 @@ dotenv.load_dotenv()
 IN_CLOUD = bool(os.getenv("IN_CLOUD", False))
 SIGNED_URL_EXPIRATION_TIME = int(os.getenv("SIGNED_URL_EXPIRATION_TIME", 200))
 
-MONGODB_URI = os.getenv("MONGODB_URI")
+# General DB configuration
+DB_ENGINE = os.getenv("DB_ENGINE", "POSTGRES") # Supported: MONGO, POSTGRES
 DB_NAME = os.getenv("DB_NAME")
 KB_COLLECTION_NAME = os.getenv("KB_COLLECTION_NAME", "knowledge_bases")
+# MongoDB configuration
+MONGODB_URI = os.getenv("MONGODB_URI")
+# PostgresSQL configuration
+POSTGRES_HOST = os.getenv("POSTGRES_HOST")
+POSTGRES_PORT = os.getenv("POSTGRES_PORT", 5432)
+POSTGRES_USERNAME = os.getenv("POSTGRES_USERNAME")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "voyage-3.5-lite")
 EMBEDDING_MODEL_DIM = int(os.getenv("EMBEDDING_MODEL_DIM", 1024))
