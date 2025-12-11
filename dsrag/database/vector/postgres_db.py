@@ -245,10 +245,10 @@ class PostgresVectorDB(VectorDB):
                 filter_value = metadata_filter['value']
 
             query = sql.SQL("""
-                SELECT metadata, embedding, 1 - (embedding <=> %s) AS cosine_similarity
+                SELECT metadata, embedding, (embedding <=> %s) AS cosine_distance
                 FROM {} 
                 WHERE {} 
-                ORDER BY cosine_similarity DESC 
+                ORDER BY cosine_distance ASC 
                 LIMIT %s
             """).format(
                 sql.Identifier(self.table_name),
@@ -263,9 +263,9 @@ class PostgresVectorDB(VectorDB):
             cur.execute(query, params)
         else:
             query = sql.SQL("""
-                SELECT metadata, embedding, 1 - (embedding <=> %s) AS cosine_similarity
+                SELECT metadata, embedding, (embedding <=> %s) AS cosine_distance
                 FROM {}
-                ORDER BY cosine_similarity DESC
+                ORDER BY cosine_distance DESC
                 LIMIT %s
             """).format(sql.Identifier(self.table_name))
             cur.execute(query, (query_vector, top_k))
@@ -273,14 +273,14 @@ class PostgresVectorDB(VectorDB):
         results = cur.fetchall()
         formatted_results: list[VectorSearchResult] = []
         for row in results:
-            metadata, embedding, cosine_similarity = row
+            metadata, embedding, cosine_distance = row
 
             formatted_results.append(
                 VectorSearchResult(
                     doc_id=metadata["doc_id"],
                     vector=embedding,
                     metadata=metadata,
-                    similarity=cosine_similarity,
+                    similarity=1 - cosine_distance,
                 )
             )
 

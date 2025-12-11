@@ -33,10 +33,12 @@ class LLM(ABC):
         pass
 
 class OpenAIChatAPI(LLM):
-    def __init__(self, model: str = "gpt-4o-mini", temperature: float = 0.2, max_tokens: int = 1000):
+    def __init__(self, model: str = "gpt-4o-mini", temperature: float = 0.2, max_tokens: int = 1000,
+                 service_tier: str = "flex"):
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.service_tier = service_tier
 
     def make_llm_call(self, chat_messages: list[dict]) -> str:
         base_url = os.environ.get("DSRAG_OPENAI_BASE_URL", None)
@@ -49,7 +51,8 @@ class OpenAIChatAPI(LLM):
             response = client.chat.completions.create(
                 model=self.model,
                 messages=chat_messages,
-                max_completion_tokens=self.max_tokens
+                max_completion_tokens=self.max_tokens,
+                service_tier=self.service_tier
             )
         else:
             response = client.chat.completions.create(
@@ -57,6 +60,7 @@ class OpenAIChatAPI(LLM):
                 messages=chat_messages,
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
+                service_tier=self.service_tier
             )
         llm_output = response.choices[0].message.content.strip()
         return llm_output

@@ -121,6 +121,7 @@ def get_structured_document_for_window(
             response_model=StructuredDocument,
             max_tokens=4000,
             temperature=0.0,
+            service_tier="flex", # This is slower, but cheaper. Some models are not supported
             messages=[
                 {
                     "role": "system",
@@ -975,7 +976,7 @@ def get_sections_from_elements(
     # Get the semantic sectioning config params, using defaults if not provided
     use_semantic_sectioning = semantic_sectioning_config.get("use_semantic_sectioning", True)
     llm_provider = semantic_sectioning_config.get("llm_provider", "openai")
-    model = semantic_sectioning_config.get("model", "gpt-4o-mini")
+    model = semantic_sectioning_config.get("model", "gpt-5-nano")
     language = semantic_sectioning_config.get("language", "en")
     llm_max_concurrent_requests = semantic_sectioning_config.get("llm_max_concurrent_requests", 5)
     min_avg_chars_per_section = semantic_sectioning_config.get("min_avg_chars_per_section", 500)
@@ -1038,7 +1039,7 @@ def get_sections_from_str(
     # Get the semantic sectioning config params, using defaults if not provided
     use_semantic_sectioning = semantic_sectioning_config.get("use_semantic_sectioning", True)
     llm_provider = semantic_sectioning_config.get("llm_provider", "openai")
-    model = semantic_sectioning_config.get("model", "gpt-4o-mini")
+    model = semantic_sectioning_config.get("model", "gpt-5-nano")
     language = semantic_sectioning_config.get("language", "en")
     llm_max_concurrent_requests = semantic_sectioning_config.get("llm_max_concurrent_requests", 5)
     min_avg_chars_per_section = semantic_sectioning_config.get("min_avg_chars_per_section", 500)
@@ -1097,7 +1098,7 @@ def get_sections_from_pages(
     # Get the semantic sectioning config params, using defaults if not provided
     use_semantic_sectioning = semantic_sectioning_config.get("use_semantic_sectioning", True)
     llm_provider = semantic_sectioning_config.get("llm_provider", "openai")
-    model = semantic_sectioning_config.get("model", "gpt-4o-mini")
+    model = semantic_sectioning_config.get("model", "gpt-5-nano")
     language = semantic_sectioning_config.get("language", "en")
     llm_max_concurrent_requests = semantic_sectioning_config.get("llm_max_concurrent_requests", 5)
     min_avg_chars_per_section = semantic_sectioning_config.get("min_avg_chars_per_section", 500)
