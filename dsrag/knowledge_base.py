@@ -1059,31 +1059,7 @@ class KnowledgeBase:
                 relevant_segment_info[-1]["score"] = score
 
             # retrieve the content for each of the segments
-            for segment_info in relevant_segment_info:
-                segment_info |= self._get_segment_content_from_database(
-                    segment_info["doc_id"],
-                    segment_info["chunk_start"],
-                    segment_info["chunk_end"],
-                    return_mode=return_mode,
-                )
-                start_page_number, end_page_number = self._get_segment_page_numbers(
-                    segment_info["doc_id"],
-                    segment_info["chunk_start"],
-                    segment_info["chunk_end"]
-                )
-                segment_info["segment_page_start"] = start_page_number
-                segment_info["segment_page_end"] = end_page_number
-
-                if self.backward_compatible:
-                    # Deprecated keys, but needed for backwards compatibility
-                    segment_info["chunk_page_start"] = start_page_number
-                    segment_info["chunk_page_end"] = end_page_number
-
-                    # Backwards compatibility, where previously the content was stored in the "text" key
-                    if type(segment_info["content"]) == str:
-                        segment_info["text"] = segment_info["content"]
-                    else:
-                        segment_info["text"] = ""
+            self._get_segments_content(relevant_segment_info, return_mode)
             
             step_duration = time.perf_counter() - step_start_time
             
@@ -1102,7 +1078,6 @@ class KnowledgeBase:
                 "total_duration_s": round(overall_duration, 4), 
                 "num_final_segments": len(relevant_segment_info)
             })
-
             return relevant_segment_info
             
         except Exception as e:
@@ -1119,3 +1094,30 @@ class KnowledgeBase:
             )
             # Re-raise the exception
             raise
+
+    def _get_segments_content(self, relevant_segment_info: list[dict], return_mode: str):
+        for segment_info in relevant_segment_info:
+            segment_info |= self._get_segment_content_from_database(
+                segment_info["doc_id"],
+                segment_info["chunk_start"],
+                segment_info["chunk_end"],
+                return_mode=return_mode,
+            )
+            start_page_number, end_page_number = self._get_segment_page_numbers(
+                segment_info["doc_id"],
+                segment_info["chunk_start"],
+                segment_info["chunk_end"]
+            )
+            segment_info["segment_page_start"] = start_page_number
+            segment_info["segment_page_end"] = end_page_number
+
+            if self.backward_compatible:
+                # Deprecated keys, but needed for backwards compatibility
+                segment_info["chunk_page_start"] = start_page_number
+                segment_info["chunk_page_end"] = end_page_number
+
+                # Backwards compatibility, where previously the content was stored in the "text" key
+                if type(segment_info["content"]) == str:
+                    segment_info["text"] = segment_info["content"]
+                else:
+                    segment_info["text"] = ""
