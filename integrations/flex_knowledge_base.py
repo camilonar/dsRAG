@@ -1,4 +1,6 @@
 from typing import Optional
+
+from dsrag.auto_context import get_segment_header
 from dsrag.knowledge_base import KnowledgeBase
 from dsrag.database.vector import VectorDB
 from dsrag.database.vector.types import MetadataFilter, MetadataFilters
@@ -113,3 +115,56 @@ class FlexKnowledgeBase(KnowledgeBase):
             return []
         search_results = self.reranker.rerank_search_results(query, search_results)
         return search_results
+
+    def _get_segments_content(self, relevant_segment_info: list[dict], return_mode: str):
+        for segment_info in relevant_segment_info:
+            doc_id, chunk_start, chunk_end = segment_info["doc_id"], segment_info["chunk_start"], segment_info["chunk_end"]
+            return_mode = self._get_return_mode(doc_id, chunk_start, chunk_end, return_mode)
+            if return_mode in ("text", "simplified_text"):
+                segments_details = self.chunk_db.get_segments_in_range(doc_id, chunk_start, chunk_end)
+                start_page_number, end_page_number = (segments_details[0]["chunk_page_start"],
+                                                      segments_details[-1]["chunk_page_end"])
+                segment_header = get_segment_header(segments_details[0].get("document_title", ""),
+                                                    segments_details[0].get("document_summary", "")).strip()
+                segment_text = "".join(details.get("chunk_text", "") for details in segments_details).strip()
+                segment_info["segment_page_start"] = start_page_number
+                segment_info["segment_page_end"] = end_page_number
+                if return_mode == "simplified_text":
+                    segment_info["header"] = segment_header.strip()
+                    segment_info["content"] = segment_text.strip()
+                else:
+                    segment_info["content"] = f"{segment_header.strip()}\n\n" + segment_text
+
+                if self.backward_compatible:
+                    # Deprecated keys, but needed for backwards compatibility
+                    segment_info["chunk_page_start"] = start_page_number
+                    segment_info["chunk_page_end"] = end_page_number
+
+                    # Backwards compatibility, where previously the content was stored in the "text" key
+                    if type(segment_info["content"]) == str:
+                        segment_info["text"] = segment_info["content"]
+                    else:
+                        segment_info["text"] = ""
+            else:
+                # get the page numbers that the segment starts and ends on
+                start_page_number, end_page_number = self._get_segment_page_numbers(doc_id, chunk_start, chunk_end)
+                page_image_paths = self.file_system.get_files(kb_id=self.kb_id, doc_id=doc_id,
+                                                              page_start=start_page_number, page_end=end_page_number)
+                # If there are no page images, fallback to using text mode
+                if page_image_paths == []:
+                    page_image_paths = self._get_segment_content_from_database(doc_id, chunk_start, chunk_end,
+                                                                               return_mode="text")
+                return page_image_paths
+
+    def _get_return_mode(self, doc_id: str, chunk_start: int, chunk_end: int, return_mode: str):
+        if return_mode == "dynamic":
+            # loop through the chunks in the segment to see if any of them are visual
+            segment_is_visual = False
+            for chunk_index in range(chunk_start, chunk_end):
+                is_visual = self._get_is_visual(doc_id, chunk_index)
+                if is_visual:
+                    return "page_images"
+
+            return "text"
+
+        return return_mode
