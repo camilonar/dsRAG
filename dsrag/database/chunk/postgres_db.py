@@ -1,8 +1,10 @@
+import contextlib
 import json
 import time
 from typing import Any, Optional
 
 from psycopg2._json import Json
+from psycopg2.pool import ThreadedConnectionPool
 
 from dsrag.database.chunk.db import ChunkDB
 from dsrag.database.chunk.types import FormattedDocument
@@ -22,7 +24,8 @@ class PostgresChunkDB(ChunkDB):
         self.database = database
         self.host = host
         self.port = port
-        self.connection_params = {
+
+        connection_params = {
             "dbname": database,
             "user": username,
             "password": password,
@@ -30,6 +33,11 @@ class PostgresChunkDB(ChunkDB):
             "port": port,
             "sslmode": ssl_mode
         }
+        self.connection_pool = ThreadedConnectionPool(
+            1,  # minconn
+            20,  # maxconn
+            **connection_params
+        )
 
         if not table_name:
             # Strip the kb of any spaces
@@ -57,29 +65,53 @@ class PostgresChunkDB(ChunkDB):
         ]
 
         # Create a table for this kb_id if it doesn't exist
-        conn = psycopg2.connect(**self.connection_params)
-        cur = conn.cursor()
-        cur.execute(f"SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = '{self.table_name}')")
-        exists = cur.fetchone()[0]
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(f"SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = '{self.table_name}')")
+            exists = cur.fetchone()[0]
 
-        if not exists:
-            # Create a table for this kb_id
-            query_statement = f"CREATE TABLE {self.table_name} ("
-            for column in self.columns:
-                query_statement += f"{column['name']} {column['type']}, "
-            query_statement = query_statement[:-2] + ")"
-            cur.execute(query_statement)
-            conn.commit()
-        else:
-            # Check if we need to add any columns to the table. This happens if the columns have been updated
-            cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{self.table_name}'")
-            columns = cur.fetchall()
-            column_names = [column[0] for column in columns]
-            for column in self.columns:
-                if column["name"] not in column_names:
-                    # Add the column to the table
-                    cur.execute("ALTER TABLE {}_chunks ADD COLUMN {} {}".format(kb_id, column["name"], column["type"]))
-        conn.close()
+            if not exists:
+                # Create a table for this kb_id
+                query_statement = f"CREATE TABLE {self.table_name} ("
+                for column in self.columns:
+                    query_statement += f"{column['name']} {column['type']}, "
+                query_statement = query_statement[:-2] + ")"
+                cur.execute(query_statement)
+                conn.commit()
+            else:
+                # Check if we need to add any columns to the table. This happens if the columns have been updated
+                cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{self.table_name}'")
+                columns = cur.fetchall()
+                column_names = [column[0] for column in columns]
+                for column in self.columns:
+                    if column["name"] not in column_names:
+                        # Add the column to the table
+                        cur.execute("ALTER TABLE {}_chunks ADD COLUMN {} {}".format(kb_id, column["name"], column["type"]))
+
+    @contextlib.contextmanager
+    def get_db_connection(self):
+        """
+        Context manager to acquire a connection from the pool and return it.
+        """
+        conn = None
+        try:
+            # Acquire a connection from the pool
+            conn = self.connection_pool.getconn()
+            # Yield the connection object to the 'with' block
+            yield conn
+        except psycopg2.Error as e:
+            # Roll back the transaction if an error occurs within the 'with' block
+            if conn:
+                conn.rollback()
+            print(f"Database error: {e}")
+            raise
+        finally:
+            # Ensure the connection is returned to the pool when the block is exited
+            if conn:
+                # Commit the transaction if no exception was raised in the 'with' block
+                if conn.autocommit is False:
+                    conn.commit()
+                self.connection_pool.putconn(conn)
 
     def format_query(self, query: dict) -> str:
         # This method assumes the resulting dict is going to be used in a 'WHERE metadata @> %s' style query
@@ -87,69 +119,66 @@ class PostgresChunkDB(ChunkDB):
 
     def add_document(self, doc_id: str, chunks: dict[int, dict[str, Any]], supp_id: str = "", metadata: dict = {}) -> None:
         # Add the docs to the sqlite table
-        conn = psycopg2.connect(**self.connection_params)
-        cur = conn.cursor()
-        # Create a created on timestamp
-        created_on = str(int(time.time()))
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            # Create a created on timestamp
+            created_on = str(int(time.time()))
 
-        # Get the data from the dictionary
-        for chunk_index, chunk in chunks.items():
-            chunk_text = chunk.get("chunk_text", "")
-            chunk_length = len(chunk_text)
+            # Get the data from the dictionary
+            for chunk_index, chunk in chunks.items():
+                chunk_text = chunk.get("chunk_text", "")
+                chunk_length = len(chunk_text)
 
-            values_dict = {
-                'doc_id': doc_id,
-                'document_title': chunk.get("document_title", ""),
-                'document_summary': chunk.get("document_summary", ""),
-                'section_title': chunk.get("section_title", ""),
-                'section_summary': chunk.get("section_summary", ""),
-                'chunk_text': chunk.get("chunk_text", ""),
-                'chunk_page_start': chunk.get("chunk_page_start", None),
-                'chunk_page_end': chunk.get("chunk_page_end", None),
-                'is_visual': chunk.get("is_visual", False),
-                'chunk_index': chunk_index,
-                'chunk_length': chunk_length,
-                'created_on': created_on,
-                'supp_id': supp_id,
-                'metadata': Json(metadata)
-            }
+                values_dict = {
+                    'doc_id': doc_id,
+                    'document_title': chunk.get("document_title", ""),
+                    'document_summary': chunk.get("document_summary", ""),
+                    'section_title': chunk.get("section_title", ""),
+                    'section_summary': chunk.get("section_summary", ""),
+                    'chunk_text': chunk.get("chunk_text", ""),
+                    'chunk_page_start': chunk.get("chunk_page_start", None),
+                    'chunk_page_end': chunk.get("chunk_page_end", None),
+                    'is_visual': chunk.get("is_visual", False),
+                    'chunk_index': chunk_index,
+                    'chunk_length': chunk_length,
+                    'created_on': created_on,
+                    'supp_id': supp_id,
+                    'metadata': Json(metadata)
+                }
 
-            # Generate the column names and placeholders
-            columns = ', '.join(values_dict.keys())
-            placeholders = ', '.join(['%s'] * len(values_dict))
+                # Generate the column names and placeholders
+                columns = ', '.join(values_dict.keys())
+                placeholders = ', '.join(['%s'] * len(values_dict))
 
-            sql = f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders})"
-            cur.execute(sql, tuple(values_dict.values()))
+                sql = f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders})"
+                cur.execute(sql, tuple(values_dict.values()))
 
-        conn.commit()
-        conn.close()
+            conn.commit()
 
     def remove_document(self, doc_id: str) -> None:
         # Remove the docs from the sqlite table
-        conn = psycopg2.connect(**self.connection_params)
-        cur = conn.cursor()
-        metadata_query = self.format_query({})
-        cur.execute(f"DELETE FROM {self.table_name} WHERE doc_id='{doc_id}' AND metadata @> '{metadata_query}'")
-        conn.commit()
-        conn.close()
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            metadata_query = self.format_query({})
+            cur.execute(f"DELETE FROM {self.table_name} WHERE doc_id='{doc_id}' AND metadata @> '{metadata_query}'")
+            conn.commit()
 
     def get_document(
         self, doc_id: str, include_content: bool = False
     ) -> Optional[FormattedDocument]:
         # Retrieve the document from the Postgres table
-        conn = psycopg2.connect(**self.connection_params)
-        cur = conn.cursor()
-        columns = ["supp_id", "document_title", "document_summary", "created_on", "metadata"]
-        if include_content:
-            columns += ["chunk_text", "chunk_index"]
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            columns = ["supp_id", "document_title", "document_summary", "created_on", "metadata"]
+            if include_content:
+                columns += ["chunk_text", "chunk_index"]
 
-        metadata_query = self.format_query({})
-        query_statement = (
-            f"SELECT {', '.join(columns)} FROM {self.table_name} WHERE doc_id='{doc_id}' AND metadata @> '{metadata_query}'"
-        )
-        cur.execute(query_statement)
-        results = cur.fetchall()
-        conn.close()
+            metadata_query = self.format_query({})
+            query_statement = (
+                f"SELECT {', '.join(columns)} FROM {self.table_name} WHERE doc_id='{doc_id}' AND metadata @> '{metadata_query}'"
+            )
+            cur.execute(query_statement)
+            results = cur.fetchall()
 
         # If there are no results, return None
         if not results:
@@ -187,166 +216,170 @@ class PostgresChunkDB(ChunkDB):
 
     def get_chunk_text(self, doc_id: str, chunk_index: int) -> Optional[str]:
         # Retrieve the chunk text from the Postgres table
-        conn = psycopg2.connect(**self.connection_params)
-        metadata_query = self.format_query({})
-        cur = conn.cursor()
-        cur.execute(
-            f"SELECT chunk_text FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
-        )
-        result = cur.fetchone()
-        conn.close()
+        with self.get_db_connection() as conn:
+            metadata_query = self.format_query({})
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT chunk_text FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
+            )
+            result = cur.fetchone()
         if result:
             return result[0]
         return None
     
     def get_is_visual(self, doc_id: str, chunk_index: int) -> Optional[bool]:
         # Retrieve the is_visual flag from the Postgres table
-        conn = psycopg2.connect(**self.connection_params)
-        cur = conn.cursor()
-        metadata_query = self.format_query({})
-        cur.execute(
-            f"SELECT is_visual FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
-        )
-        result = cur.fetchone()
-        conn.close()
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            metadata_query = self.format_query({})
+            cur.execute(
+                f"SELECT is_visual FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
+            )
+            result = cur.fetchone()
         if result:
             return result[0]
         return None
     
     def get_chunk_page_numbers(self, doc_id: str, chunk_index: int) -> Optional[tuple[int, int]]:
         # Retrieve the chunk page numbers from the Postgres table
-        conn = psycopg2.connect(**self.connection_params)
-        cur = conn.cursor()
-        metadata_query = self.format_query({})
-        cur.execute(
-            f"SELECT chunk_page_start, chunk_page_end FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
-        )
-        result = cur.fetchone()
-        conn.close()
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            metadata_query = self.format_query({})
+            cur.execute(
+                f"SELECT chunk_page_start, chunk_page_end FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
+            )
+            result = cur.fetchone()
         if result:
             return result
         return None
 
     def get_document_title(self, doc_id: str, chunk_index: int) -> Optional[str]:
         # Retrieve the document title from the Postgres table
-        conn = psycopg2.connect(**self.connection_params)
-        cur = conn.cursor()
-        metadata_query = self.format_query({})
-        cur.execute(
-            f"SELECT document_title FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
-        )
-        result = cur.fetchone()
-        conn.close()
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            metadata_query = self.format_query({})
+            cur.execute(
+                f"SELECT document_title FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
+            )
+            result = cur.fetchone()
         if result:
             return result[0]
         return None
 
     def get_document_summary(self, doc_id: str, chunk_index: int) -> Optional[str]:
         # Retrieve the document summary from the Postgres table
-        conn = psycopg2.connect(**self.connection_params)
-        cur = conn.cursor()
-        metadata_query = self.format_query({})
-        cur.execute(
-            f"SELECT document_summary FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
-        )
-        result = cur.fetchone()
-        conn.close()
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            metadata_query = self.format_query({})
+            cur.execute(
+                f"SELECT document_summary FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
+            )
+            result = cur.fetchone()
         if result:
             return result[0]
         return None
 
     def get_section_title(self, doc_id: str, chunk_index: int) -> Optional[str]:
         # Retrieve the section title from the Postgres table
-        conn = psycopg2.connect(**self.connection_params)
-        cur = conn.cursor()
-        metadata_query = self.format_query({})
-        cur.execute(
-            f"SELECT section_title FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
-        )
-        result = cur.fetchone()
-        conn.close()
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            metadata_query = self.format_query({})
+            cur.execute(
+                f"SELECT section_title FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
+            )
+            result = cur.fetchone()
         if result:
             return result[0]
         return None
 
     def get_section_summary(self, doc_id: str, chunk_index: int) -> Optional[str]:
         # Retrieve the section summary from the Postgres table
-        conn = psycopg2.connect(**self.connection_params)
-        cur = conn.cursor()
-        metadata_query = self.format_query({})
-        cur.execute(
-            f"SELECT section_summary FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
-        )
-        result = cur.fetchone()
-        conn.close()
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            metadata_query = self.format_query({})
+            cur.execute(
+                f"SELECT section_summary FROM {self.table_name} WHERE doc_id='{doc_id}' AND chunk_index={chunk_index} AND metadata @> '{metadata_query}'"
+            )
+            result = cur.fetchone()
         if result:
             return result[0]
         return None
 
+    def get_segments_in_range(self, doc_id: str, chunk_start: int, chunk_end: int) -> list[dict]:
+        # Retrieve ALL the fields from ALL the segments between the given chunk indices
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            metadata_query = self.format_query({})
+            columns = ["doc_id", "chunk_page_start", "chunk_page_end", "document_title", "document_summary",
+                       "chunk_text"]
+            cur.execute(
+                f"SELECT {', '.join(columns)} FROM {self.table_name} WHERE doc_id='{doc_id}' AND "
+                f"chunk_index BETWEEN {chunk_start} AND {chunk_end} AND metadata @> '{metadata_query}'"
+            )
+            result = cur.fetchall()
+        if result:
+            return [{columns[i]: r[i] for i in range(len(columns))} for r in result]
+        return []
+
     def get_all_doc_ids(self, supp_id: Optional[str] = None) -> list[str]:
         # Retrieve all document IDs from the Postgres table
-        conn = psycopg2.connect(**self.connection_params)
-        cur = conn.cursor()
-        metadata_query = self.format_query({})
-        query_statement = f"SELECT DISTINCT doc_id FROM {self.table_name} WHERE metadata @> '{metadata_query}'"
-        if supp_id:
-            query_statement += f" AND supp_id='{supp_id}'"
-        cur.execute(query_statement)
-        results = cur.fetchall()
-        conn.close()
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            metadata_query = self.format_query({})
+            query_statement = f"SELECT DISTINCT doc_id FROM {self.table_name} WHERE metadata @> '{metadata_query}'"
+            if supp_id:
+                query_statement += f" AND supp_id='{supp_id}'"
+            cur.execute(query_statement)
+            results = cur.fetchall()
         return [result[0] for result in results]
 
     def doc_id_exists(self, doc_id: str) -> bool:
         # Retrieve all document IDs from the Postgres table
-        conn = psycopg2.connect(**self.connection_params)
-        cur = conn.cursor()
-        metadata_query = self.format_query({})
-        query_statement = f"SELECT DISTINCT doc_id FROM {self.table_name} WHERE doc_id='{doc_id}' AND metadata @> '{metadata_query}' LIMIT 1"
-        cur.execute(query_statement)
-        results = cur.fetchall()
-        conn.close()
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            metadata_query = self.format_query({})
+            query_statement = f"SELECT DISTINCT doc_id FROM {self.table_name} WHERE doc_id='{doc_id}' AND metadata @> '{metadata_query}' LIMIT 1"
+            cur.execute(query_statement)
+            results = cur.fetchall()
         return True if results else False
     
     def get_document_count(self) -> int:
         # Retrieve the number of documents in the Postgres table
-        conn = psycopg2.connect(**self.connection_params)
-        cur = conn.cursor()
-        metadata_query = self.format_query({})
-        cur.execute(f"SELECT COUNT(DISTINCT doc_id) FROM {self.table_name} WHERE metadata @> '{metadata_query}'")
-        result = cur.fetchone()
-        conn.close()
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            metadata_query = self.format_query({})
+            cur.execute(f"SELECT COUNT(DISTINCT doc_id) FROM {self.table_name} WHERE metadata @> '{metadata_query}'")
+            result = cur.fetchone()
         if result is None:
             return 0
         return result[0]
 
     def get_total_num_characters(self) -> int:
         # Retrieve the total number of characters in the Postgres table
-        conn = psycopg2.connect(**self.connection_params)
-        cur = conn.cursor()
-        metadata_query = self.format_query({})
-        cur.execute(f"SELECT SUM(chunk_length) FROM {self.table_name} WHERE metadata @> '{metadata_query}'")
-        result = cur.fetchone()
-        conn.close()
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            metadata_query = self.format_query({})
+            cur.execute(f"SELECT SUM(chunk_length) FROM {self.table_name} WHERE metadata @> '{metadata_query}'")
+            result = cur.fetchone()
         if result is None or result[0] is None:
             return 0
         return result[0]
 
     def delete(self) -> None:
         # Delete the Postgres table
-        conn = psycopg2.connect(**self.connection_params)
-        cur = conn.cursor()
-        if not self.mandatory_metadata:
-            cur.execute(f"DROP TABLE {self.table_name}")
-        else:
-            from psycopg2 import sql
-            condition = self.format_query({})
-            cur.execute(
-                sql.SQL(
-                    "DELETE FROM {} WHERE metadata @> %s").format(sql.Identifier(self.table_name)),
-                [condition]
-            )
-        conn.commit()
-        conn.close()
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            if not self.mandatory_metadata:
+                cur.execute(f"DROP TABLE {self.table_name}")
+            else:
+                from psycopg2 import sql
+                condition = self.format_query({})
+                cur.execute(
+                    sql.SQL(
+                        "DELETE FROM {} WHERE metadata @> %s").format(sql.Identifier(self.table_name)),
+                    [condition]
+                )
+            conn.commit()
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -359,3 +392,6 @@ class PostgresChunkDB(ChunkDB):
             "port": self.port,
             "table_name": self.table_name
         }
+
+    def __del__(self):
+        self.connection_pool.closeall()

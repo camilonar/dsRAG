@@ -117,3 +117,19 @@ class ChunkDB(ABC):
         Delete the chunk database.
         """
         pass
+
+    def get_segments_in_range(self, doc_id: str, chunk_start: int, chunk_end: int) -> list[dict]:
+        """
+        Retrieve ALL the fields from ALL the segments between the given chunk indices.
+        """
+        # This is a generic implementation that is very inefficient. You should override it in your own implementations
+        results = []
+        for i in range(chunk_start, chunk_end + 1):
+            chunk_page_start, chunk_page_end = self.get_chunk_page_numbers(doc_id, i)
+            document_title = self.get_document_title(doc_id, i)
+            document_summary = self.get_document_summary(doc_id, i)
+            chunk_text = self.get_chunk_text(doc_id, i)
+            results.append({"chunk_page_start": chunk_page_start, "chunk_page_end": chunk_page_end,
+                            "document_title": document_title, "document_summary": document_summary,
+                            "chunk_text": chunk_text})
+        return results
