@@ -2,7 +2,9 @@ import os
 from typing import Optional
 
 from fastapi import APIRouter, Body
+from fastapi.params import Query
 
+from dsrag.database.vector.types import MetadataFilter
 from dsrag.knowledge_base import KnowledgeBase
 from integrations.utils import env, kb_creation
 from integrations.web.dto.knowledge_validator import AddDocumentModel
@@ -10,20 +12,24 @@ from integrations.web.dto.knowledge_validator import AddDocumentModel
 router = APIRouter(prefix="/api/v1/knowledge", tags=["Knowledge"])
 
 main_kb = kb_creation.load_or_create(env.KB_NAME, {})
+cache_kb = {} # Small cache to store Knowledge bases that have been recently used
 file_system = kb_creation.create_file_system()
 
 @router.get("/search")
-async def search(q: str, kb_id: Optional[str] = None) -> list[dict]:
+async def search(q: str, kb_id: Optional[str] = None,
+                 doc_ids: Optional[list[str]] = Query(None, max_length=10)) -> list[dict]:
     """
     Searches on the Knowledge Base
 
     :param q: the query string
     :param kb_id: The ID of the knowledge base that is going to be searched. If no kb_id is provided then the default
     KB is used
+    :param doc_ids: a list of documents IDs to restrict the search (Optional)
     """
     search_queries = [q]
     kb = _create_or_retrieve_kb(kb_id)
-    results = kb.query(search_queries, return_mode="simplified_text")
+    mfilter = MetadataFilter(field="doc_id", operator="in", value=doc_ids) if doc_ids else None
+    results = kb.query(search_queries, return_mode="simplified_text", metadata_filter=mfilter)
 
     return results
 
@@ -69,8 +75,23 @@ async def download_document(doc_id: str, kb_id: Optional[str] = None) -> dict:
     kb_name = kb_id if kb_id else env.KB_NAME
     return file_system.generate_download_url(kb_name, doc_id, doc_id)
 
+@router.get("/docs/id")
+async def find_doc_ids(doc_id: str = Query(..., min_length=3), kb_id: Optional[str] = None) -> list[str]:
+    """
+    Finds the available document IDs
+    """
+    kb = _create_or_retrieve_kb(kb_id)
+    doc_ids = kb.vector_db.find_doc_ids_like(doc_id, limit=20)
+    return doc_ids
+
 def _create_or_retrieve_kb(kb_id: Optional[str] = None) -> KnowledgeBase:
     if not kb_id:
         return main_kb
     else:
-        return kb_creation.load_or_create(kb_id, mandatory_metadata={"kb_id": kb_id})
+        if kb_id in cache_kb:
+            return cache_kb[kb_id]
+        new_kb = kb_creation.load_or_create(kb_id, mandatory_metadata={"kb_id": kb_id})
+        cache_kb[kb_id] = new_kb
+        if len(cache_kb) > env.MAX_KB_CACHE:
+            cache_kb.pop(next(iter(cache_kb)))
+        return new_kb

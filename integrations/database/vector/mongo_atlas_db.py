@@ -60,14 +60,14 @@ class MongoAtlasDB(VectorDB):
     """
 
     def __init__(self, db_name: str, kb_id: str, uri: str, dimension: int, collection_name: str = None,
-                 index_name: str = None, metric: str = "cosine", mandatory_metadata: Optional[dict] = {}) -> None:
+                 index_name: str = None, metric: str = "cosine", mandatory_metadata: Optional[dict] = None) -> None:
         self.db_name = db_name
         self.kb_id = kb_id
         self.uri = uri
         self.dimension = dimension
         self.metric = metric
         self.mongo_db = MongoCrud(uri=uri, db_name=self.db_name)
-        self.mandatory_metadata = mandatory_metadata
+        self.mandatory_metadata = mandatory_metadata if mandatory_metadata else {}
 
         if collection_name is not None:
             self.collection_name = collection_name

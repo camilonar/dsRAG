@@ -5,6 +5,7 @@ import numpy as np
 from dsrag.database.vector.db import VectorDB
 from dsrag.database.vector.types import VectorSearchResult, MetadataFilter, ChunkMetadata, Vector, MetadataFilters
 from dsrag.utils.imports import LazyLoader
+from integrations.database.doc_library import DocLibrary
 
 # Lazy load PostgreSQL dependencies
 psycopg2 = LazyLoader("psycopg2", "psycopg2-binary")
@@ -80,9 +81,10 @@ def format_metadata_filter(metadata_filter: MetadataFilter) -> str:
     return filter_expression
 
 
-class PostgresVectorDB(VectorDB):
+class PostgresVectorDB(VectorDB, DocLibrary):
+
     def __init__(self, kb_id: str, username: str, password: str, database: str, host: str = "localhost", port: int = 5432,
-                 vector_dimension: int = 768, table_name: str = "", mandatory_metadata: Optional[dict] = {},
+                 vector_dimension: int = 768, table_name: str = "", mandatory_metadata: Optional[dict] = None,
                  ssl_mode: str = "require"):
         self.kb_id = kb_id
         if not table_name:
@@ -99,7 +101,7 @@ class PostgresVectorDB(VectorDB):
         self.host = host
         self.port = port
         self.vector_dimension = vector_dimension
-        self.mandatory_metadata = mandatory_metadata
+        self.mandatory_metadata = mandatory_metadata if mandatory_metadata else {}
         self.connection_params = {
             "dbname": database,
             "user": username,
@@ -306,6 +308,33 @@ class PostgresVectorDB(VectorDB):
             )
         conn.commit()
         conn.close()
+
+    def find_doc_ids_like(self, query: str, limit: int = 20) -> list[str]:
+        conn = psycopg2.connect(**self.connection_params)
+
+        from psycopg2 import sql
+        cur = conn.cursor()
+        query = f"%{query}%"
+        if not self.mandatory_metadata:
+            query_sql = sql.SQL("""SELECT DISTINCT(metadata ->> 'doc_id') as doc_id
+                                FROM {}
+                                WHERE (metadata ->> 'doc_id') ILIKE %s
+                                ORDER BY doc_id
+                                LIMIT %s""").format(sql.Identifier(self.table_name))
+            cur.execute(query_sql, (query, limit))
+        else:
+            query_sql = sql.SQL("""SELECT DISTINCT(metadata ->> 'doc_id') as doc_id
+                                FROM {}
+                                WHERE (metadata ->> 'doc_id') ILIKE %s
+                                AND metadata @> %s
+                                ORDER BY doc_id
+                                LIMIT %s""").format(sql.Identifier(self.table_name))
+            condition = self.format_query({})
+            cur.execute(query_sql, (query, json.dumps(condition), 20))
+        results = cur.fetchall()
+        doc_ids = [r[0] for r in results]
+        conn.close()
+        return doc_ids
 
     def to_dict(self):
         return {

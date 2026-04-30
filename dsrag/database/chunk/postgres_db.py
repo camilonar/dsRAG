@@ -15,6 +15,7 @@ psycopg2 = LazyLoader("psycopg2", "psycopg2-binary")
 
 
 class PostgresChunkDB(ChunkDB):
+    MAX_IDLE_TIME = 450
 
     def __init__(self, kb_id: str, username: str, password: str, database: str, host: str="localhost", port: int = 5432,
                  table_name: str = "", mandatory_metadata: dict = {}, ssl_mode: str = "require") -> None:
@@ -24,8 +25,9 @@ class PostgresChunkDB(ChunkDB):
         self.database = database
         self.host = host
         self.port = port
+        self.last_connection = time.time()
 
-        connection_params = {
+        self.connection_params = {
             "dbname": database,
             "user": username,
             "password": password,
@@ -33,11 +35,7 @@ class PostgresChunkDB(ChunkDB):
             "port": port,
             "sslmode": ssl_mode
         }
-        self.connection_pool = ThreadedConnectionPool(
-            1,  # minconn
-            20,  # maxconn
-            **connection_params
-        )
+        self.connection_pool = self.create_connection_pool()
 
         if not table_name:
             # Strip the kb of any spaces
@@ -88,6 +86,13 @@ class PostgresChunkDB(ChunkDB):
                         # Add the column to the table
                         cur.execute("ALTER TABLE {}_chunks ADD COLUMN {} {}".format(kb_id, column["name"], column["type"]))
 
+    def create_connection_pool(self):
+        return ThreadedConnectionPool(
+            1,  # minconn
+            20,  # maxconn
+            **self.connection_params
+        )
+
     @contextlib.contextmanager
     def get_db_connection(self):
         """
@@ -95,7 +100,13 @@ class PostgresChunkDB(ChunkDB):
         """
         conn = None
         try:
-            # Acquire a connection from the pool
+            # When using a serverless Postgres instance connections may end up as orphans if the database is not being
+            # used. This replaces all of them if a connection is not acquired frequently enough
+            if time.time() - self.last_connection > self.MAX_IDLE_TIME:
+                self.connection_pool.closeall()
+                self.connection_pool = self.create_connection_pool()
+
+            self.last_connection = time.time()
             conn = self.connection_pool.getconn()
             # Yield the connection object to the 'with' block
             yield conn
@@ -119,41 +130,42 @@ class PostgresChunkDB(ChunkDB):
 
     def add_document(self, doc_id: str, chunks: dict[int, dict[str, Any]], supp_id: str = "", metadata: dict = {}) -> None:
         # Add the docs to the sqlite table
-        with self.get_db_connection() as conn:
-            cur = conn.cursor()
-            # Create a created on timestamp
-            created_on = str(int(time.time()))
+        conn = psycopg2.connect(**self.connection_params)
+        cur = conn.cursor()
+        # Create a created on timestamp
+        created_on = str(int(time.time()))
 
-            # Get the data from the dictionary
-            for chunk_index, chunk in chunks.items():
-                chunk_text = chunk.get("chunk_text", "")
-                chunk_length = len(chunk_text)
+        # Get the data from the dictionary
+        for chunk_index, chunk in chunks.items():
+            chunk_text = chunk.get("chunk_text", "")
+            chunk_length = len(chunk_text)
 
-                values_dict = {
-                    'doc_id': doc_id,
-                    'document_title': chunk.get("document_title", ""),
-                    'document_summary': chunk.get("document_summary", ""),
-                    'section_title': chunk.get("section_title", ""),
-                    'section_summary': chunk.get("section_summary", ""),
-                    'chunk_text': chunk.get("chunk_text", ""),
-                    'chunk_page_start': chunk.get("chunk_page_start", None),
-                    'chunk_page_end': chunk.get("chunk_page_end", None),
-                    'is_visual': chunk.get("is_visual", False),
-                    'chunk_index': chunk_index,
-                    'chunk_length': chunk_length,
-                    'created_on': created_on,
-                    'supp_id': supp_id,
-                    'metadata': Json(metadata)
-                }
+            values_dict = {
+                'doc_id': doc_id,
+                'document_title': chunk.get("document_title", ""),
+                'document_summary': chunk.get("document_summary", ""),
+                'section_title': chunk.get("section_title", ""),
+                'section_summary': chunk.get("section_summary", ""),
+                'chunk_text': chunk.get("chunk_text", ""),
+                'chunk_page_start': chunk.get("chunk_page_start", None),
+                'chunk_page_end': chunk.get("chunk_page_end", None),
+                'is_visual': chunk.get("is_visual", False),
+                'chunk_index': chunk_index,
+                'chunk_length': chunk_length,
+                'created_on': created_on,
+                'supp_id': supp_id,
+                'metadata': Json(metadata)
+            }
 
-                # Generate the column names and placeholders
-                columns = ', '.join(values_dict.keys())
-                placeholders = ', '.join(['%s'] * len(values_dict))
+            # Generate the column names and placeholders
+            columns = ', '.join(values_dict.keys())
+            placeholders = ', '.join(['%s'] * len(values_dict))
 
-                sql = f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders})"
-                cur.execute(sql, tuple(values_dict.values()))
+            sql = f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders})"
+            cur.execute(sql, tuple(values_dict.values()))
 
             conn.commit()
+        conn.close()
 
     def remove_document(self, doc_id: str) -> None:
         # Remove the docs from the sqlite table
