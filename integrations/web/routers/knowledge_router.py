@@ -2,12 +2,12 @@ import os
 from typing import Optional
 
 from fastapi import APIRouter, Body
-from fastapi.params import Query
+from fastapi.params import Query, Depends
 
-from dsrag.database.vector.types import MetadataFilter
+from dsrag.database.vector.types import MetadataFilter, MetadataFilters
 from dsrag.knowledge_base import KnowledgeBase
 from integrations.utils import env, kb_creation
-from integrations.web.dto.knowledge_validator import AddDocumentModel
+from integrations.web.dto.knowledge_validator import AddDocumentModel, SearchDocumentModel
 
 router = APIRouter(prefix="/api/v1/knowledge", tags=["Knowledge"])
 
@@ -16,20 +16,23 @@ cache_kb = {} # Small cache to store Knowledge bases that have been recently use
 file_system = kb_creation.create_file_system()
 
 @router.get("/search")
-async def search(q: str, kb_id: Optional[str] = None,
-                 doc_ids: Optional[list[str]] = Query(None, max_length=10)) -> list[dict]:
+async def search(query: SearchDocumentModel = Depends()) -> list[dict]:
     """
     Searches on the Knowledge Base
 
-    :param q: the query string
-    :param kb_id: The ID of the knowledge base that is going to be searched. If no kb_id is provided then the default
-    KB is used
-    :param doc_ids: a list of documents IDs to restrict the search (Optional)
+    :param query: the query parameters
     """
-    search_queries = [q]
-    kb = _create_or_retrieve_kb(kb_id)
-    mfilter = MetadataFilter(field="doc_id", operator="in", value=doc_ids) if doc_ids else None
-    results = kb.query(search_queries, return_mode="simplified_text", metadata_filter=mfilter)
+    search_queries = [query.q]
+    kb = _create_or_retrieve_kb(query.kb_id)
+    mfilters = MetadataFilters(filters=[], operator="and")
+    eq_filters = query.model_dump(include={"year", "court", "p_type"}, exclude_defaults=True, exclude_none=True)
+    for k, v in eq_filters.items():
+        mfilters["filters"].append(MetadataFilter(field=k, operator="equals", value=str(v)))
+
+    in_filters = query.model_dump(include={"doc_ids"}, exclude_defaults=True, exclude_none=True)
+    for k, v in in_filters.items():
+        mfilters["filters"].append(MetadataFilter(field=k[:-1], operator="in", value=v))
+    results = kb.query(search_queries, return_mode="simplified_text", metadata_filter=mfilters)
 
     return results
 

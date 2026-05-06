@@ -43,7 +43,6 @@ def format_metadata_filter(metadata_filter: MetadataFilter) -> str:
     Returns:
         str: The formatted metadata filter.
     """
-
     field = metadata_filter['field']
     operator = metadata_filter['operator']
     value = metadata_filter['value']
