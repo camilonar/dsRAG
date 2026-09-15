@@ -15,7 +15,6 @@ pgvector = LazyLoader("pgvector")
 
 # We'll import register_vector when needed to avoid immediate import
 
-
 def format_metadata_filters(metadata_filters: MetadataFilters) -> str:
     filters = metadata_filters["filters"]
     operator = metadata_filters["operator"]
@@ -85,9 +84,34 @@ def format_metadata_filter(metadata_filter: MetadataFilter) -> str:
 class PostgresVectorDB(VectorDB, DocLibrary):
     MAX_IDLE_TIME = 450
 
+    @classmethod
+    def _embedding_config(cls, embedding_type: str):
+        configs = {
+            "vector": {
+                "extension": "vector",
+                "column_type": "vector",
+                "quantize_sql": "%s",
+                "index_method": "hnsw",
+                "operator_class": "vector_cosine_ops",
+                "index_options": "WITH (m = 16, ef_construction = 64)",
+            },
+            "rabitq8": {
+                "extension": "lakebase_vector CASCADE",
+                "column_type": "rabitq8",
+                "quantize_sql": "quantize_to_rabitq8(%s::vector)",
+                "index_method": "lakebase_ann",
+                "operator_class": "rabitq8_cosine_ops",
+                "index_options": "",
+            },
+        }
+        try:
+            return configs[embedding_type]
+        except KeyError:
+            raise ValueError("EMBEDDING_TYPE must be either 'vector' or 'rabitq8'")
+
     def __init__(self, kb_id: str, username: str, password: str, database: str, host: str = "localhost", port: int = 5432,
-                 vector_dimension: int = 768, table_name: str = "", mandatory_metadata: Optional[dict] = None,
-                 ssl_mode: str = "require"):
+                 vector_dimension: int = 768, table_name: str = "", embedding_type = "rabitq8",
+                 mandatory_metadata: Optional[dict] = None, ssl_mode: str = "require"):
         self.kb_id = kb_id
         if not table_name:
             # Strip the kb of any spaces
@@ -96,7 +120,7 @@ class PostgresVectorDB(VectorDB, DocLibrary):
         else:
             self.table_name = table_name
 
-        self.index_name = f'{table_name}_embedding_index'
+        self.index_name = f'{self.table_name}_embedding_index'
         self.username = username
         self.password = password
         self.database = database
@@ -104,6 +128,8 @@ class PostgresVectorDB(VectorDB, DocLibrary):
         self.port = port
         self.vector_dimension = vector_dimension
         self.mandatory_metadata = mandatory_metadata if mandatory_metadata else {}
+        self.embedding_type = embedding_type
+        self.embedding_config = self._embedding_config(self.embedding_type)
         self.last_connection = time.time()
         connection_params = {
             "dbname": database,
@@ -118,7 +144,7 @@ class PostgresVectorDB(VectorDB, DocLibrary):
         # Create the extension if it doesn't exist
         with self.postgres.get_db_connection() as conn:
             cur = conn.cursor()
-            cur.execute('CREATE EXTENSION IF NOT EXISTS vector')
+            cur.execute(f"CREATE EXTENSION IF NOT EXISTS {self.embedding_config['extension']}")
             conn.commit()
 
             # Import register_vector only when needed
@@ -138,12 +164,14 @@ class PostgresVectorDB(VectorDB, DocLibrary):
 
             # Create the table for this kb id if it doesn't exist
             if not exists:
-                creation_sql = "CREATE TABLE {} (id TEXT, kb_id TEXT, metadata JSONB, embedding vector(%s)," \
-                    "PRIMARY KEY(id, kb_id))"
-
                 cur.execute(
-                    sql.SQL(creation_sql)
-                    .format(sql.Identifier(self.table_name)),
+                    sql.SQL(
+                        "CREATE TABLE {} (id TEXT, kb_id TEXT, metadata JSONB, "
+                        "embedding {}(%s), PRIMARY KEY(id, kb_id))"
+                    ).format(
+                        sql.Identifier(self.table_name),
+                        sql.SQL(self.embedding_config["column_type"]),
+                    ),
                     [vector_dimension]
                 )
                 conn.commit()
@@ -152,12 +180,14 @@ class PostgresVectorDB(VectorDB, DocLibrary):
                 cur.execute(
                     sql.SQL(
                         """
-                        CREATE INDEX {} ON {} USING hnsw(embedding vector_cosine_ops)
-                        WITH (m = 16, ef_construction = 64)
+                        CREATE INDEX {} ON {} USING {}(embedding {}) {}
                         """)
                     .format(
                         sql.Identifier(self.index_name),
-                        sql.Identifier(self.table_name)
+                        sql.Identifier(self.table_name),
+                        sql.SQL(self.embedding_config["index_method"]),
+                        sql.SQL(self.embedding_config["operator_class"]),
+                        sql.SQL(self.embedding_config["index_options"])
                     )
                 )
                 conn.commit()
@@ -198,7 +228,10 @@ class PostgresVectorDB(VectorDB, DocLibrary):
                                   for _id, kb_id, content, embedding in zip(ids, ["" for _ in range(len(ids))],
                                                                             metadata, vectors)]
 
-            insert_sql = sql.SQL("INSERT INTO {} (id, kb_id, metadata, embedding) VALUES (%s, %s, %s, %s)").format(
+            insert_sql = sql.SQL(
+                "INSERT INTO {} (id, kb_id, metadata, embedding) "
+                "VALUES (%s, %s, %s, " + self.embedding_config["quantize_sql"] + ")"
+            ).format(
                 sql.Identifier(self.table_name)).as_string(cur)
 
             cur.executemany(insert_sql, data_to_insert)
@@ -241,30 +274,70 @@ class PostgresVectorDB(VectorDB, DocLibrary):
                     filter_expression = format_metadata_filter(metadata_filter)
                     filter_value = metadata_filter['value']
 
-                query = sql.SQL("""
-                    SELECT metadata, embedding, (embedding <=> %s) AS cosine_distance
-                    FROM {} 
-                    WHERE {} 
-                    ORDER BY cosine_distance ASC 
-                    LIMIT %s
-                """).format(
-                    sql.Identifier(self.table_name),
-                    sql.SQL(filter_expression)
-                )
-
                 if isinstance(filter_value, list):
-                    params = (query_vector, *filter_value, top_k)
+                    filter_params = tuple(filter_value)
                 else:
-                    params = (query_vector, filter_value, top_k)
+                    filter_params = (filter_value,)
+
+                if (
+                    ("filters" in metadata_filter and any(
+                        f["field"] == "doc_id" for f in metadata_filter["filters"]
+                    ))
+                    or (
+                        "filters" not in metadata_filter
+                        and metadata_filter["field"] == "doc_id"
+                    )
+                ):
+                    # Filtering doc_ids before calculating vector distances will usually be
+                    # substantially faster for large tables (make sure to create an index).
+                    query = sql.SQL(
+                        """
+                        WITH filtered AS MATERIALIZED (
+                            SELECT metadata, embedding
+                            FROM {}
+                            WHERE {}
+                        )
+                        SELECT metadata, embedding, (embedding <=> """
+                        + self.embedding_config["quantize_sql"]
+                        + """ ) AS cosine_distance
+                        FROM filtered
+                        ORDER BY cosine_distance ASC
+                        LIMIT %s
+                        """
+                    ).format(
+                        sql.Identifier(self.table_name),
+                        sql.SQL(filter_expression)
+                    )
+                    params = (*filter_params, query_vector, top_k)
+                else:
+                    query = sql.SQL(
+                        """
+                        SELECT metadata, embedding, (embedding <=> """
+                        + self.embedding_config["quantize_sql"]
+                        + """ ) AS cosine_distance
+                        FROM {}
+                        WHERE {}
+                        ORDER BY cosine_distance ASC
+                        LIMIT %s
+                        """
+                    ).format(
+                        sql.Identifier(self.table_name),
+                        sql.SQL(filter_expression)
+                    )
+                    params = (query_vector, *filter_params, top_k)
 
                 cur.execute(query, params)
             else:
-                query = sql.SQL("""
-                    SELECT metadata, embedding, (embedding <=> %s) AS cosine_distance
+                query = sql.SQL(
+                    """
+                    SELECT metadata, (embedding <=> """
+                    + self.embedding_config["quantize_sql"]
+                    + """ ) AS cosine_distance
                     FROM {}
-                    ORDER BY cosine_distance DESC
+                    ORDER BY cosine_distance ASC
                     LIMIT %s
-                """).format(sql.Identifier(self.table_name))
+                    """
+                ).format(sql.Identifier(self.table_name))
                 cur.execute(query, (query_vector, top_k))
 
             results = cur.fetchall()
@@ -275,7 +348,7 @@ class PostgresVectorDB(VectorDB, DocLibrary):
                 formatted_results.append(
                     VectorSearchResult(
                         doc_id=metadata["doc_id"],
-                        vector=embedding,
+                        vector=None,
                         metadata=metadata,
                         similarity=1 - cosine_distance,
                     )
@@ -335,6 +408,7 @@ class PostgresVectorDB(VectorDB, DocLibrary):
             "database": self.database,
             "host": self.host,
             "port": self.port,
+            "embedding_type": self.embedding_type,
             "vector_dimension": self.vector_dimension,
             "table_name": self.table_name
         }

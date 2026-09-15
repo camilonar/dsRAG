@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from dsrag.database.chunk.types import FormattedDocument
 
@@ -133,3 +133,12 @@ class ChunkDB(ABC):
                             "document_title": document_title, "document_summary": document_summary,
                             "chunk_text": chunk_text})
         return results
+
+    def get_segments_in_ranges(
+        self, ranges: Sequence[tuple[str, int, int]]
+    ) -> list[list[dict]]:
+        """Retrieve each requested chunk range using the single-range API."""
+        return [
+            self.get_segments_in_range(doc_id, chunk_start, chunk_end)
+            for doc_id, chunk_start, chunk_end in ranges
+        ]

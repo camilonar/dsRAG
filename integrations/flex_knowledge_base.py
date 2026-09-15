@@ -117,11 +117,21 @@ class FlexKnowledgeBase(KnowledgeBase):
         return search_results
 
     def _get_segments_content(self, relevant_segment_info: list[dict], return_mode: str):
+        return_modes = []
+        database_ranges = []
         for segment_info in relevant_segment_info:
             doc_id, chunk_start, chunk_end = segment_info["doc_id"], segment_info["chunk_start"], segment_info["chunk_end"]
-            return_mode = self._get_return_mode(doc_id, chunk_start, chunk_end, return_mode)
-            if return_mode in ("text", "simplified_text"):
-                segments_details = self.chunk_db.get_segments_in_range(doc_id, chunk_start, chunk_end)
+            segment_return_mode = self._get_return_mode(doc_id, chunk_start, chunk_end, return_mode)
+            return_modes.append(segment_return_mode)
+            if segment_return_mode in ("text", "simplified_text"):
+                database_ranges.append((doc_id, chunk_start, chunk_end))
+
+        database_segments = iter(self.chunk_db.get_segments_in_ranges(database_ranges))
+
+        for segment_info, segment_return_mode in zip(relevant_segment_info, return_modes):
+            doc_id, chunk_start, chunk_end = segment_info["doc_id"], segment_info["chunk_start"], segment_info["chunk_end"]
+            if segment_return_mode in ("text", "simplified_text"):
+                segments_details = next(database_segments)
                 start_page_number, end_page_number = (segments_details[0]["chunk_page_start"],
                                                       segments_details[-1]["chunk_page_end"])
                 segment_header = get_segment_header(segments_details[0].get("document_title", ""),
@@ -129,7 +139,7 @@ class FlexKnowledgeBase(KnowledgeBase):
                 segment_text = "".join(details.get("chunk_text", "") for details in segments_details).strip()
                 segment_info["segment_page_start"] = start_page_number
                 segment_info["segment_page_end"] = end_page_number
-                if return_mode == "simplified_text":
+                if segment_return_mode == "simplified_text":
                     segment_info["header"] = segment_header.strip()
                     segment_info["content"] = segment_text.strip()
                 else:
