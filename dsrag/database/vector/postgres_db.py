@@ -330,7 +330,7 @@ class PostgresVectorDB(VectorDB, DocLibrary):
             else:
                 query = sql.SQL(
                     """
-                    SELECT metadata, embedding, (embedding <=> """
+                    SELECT metadata, (embedding <=> """
                     + self.embedding_config["quantize_sql"]
                     + """ ) AS cosine_distance
                     FROM {}
@@ -348,7 +348,7 @@ class PostgresVectorDB(VectorDB, DocLibrary):
                 formatted_results.append(
                     VectorSearchResult(
                         doc_id=metadata["doc_id"],
-                        vector=embedding,
+                        vector=None,
                         metadata=metadata,
                         similarity=1 - cosine_distance,
                     )

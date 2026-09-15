@@ -289,6 +289,52 @@ class PostgresChunkDB(ChunkDB):
             return [{columns[i]: r[i] for i in range(len(columns))} for r in result]
         return []
 
+    def get_segments_in_ranges(self, ranges: list[tuple[str, int, int]]) -> list[list[dict]]:
+        """Retrieve multiple chunk ranges with one database query."""
+        if not ranges:
+            return []
+
+        with self.postgres.get_db_connection() as conn:
+            from psycopg2 import sql
+
+            cur = conn.cursor()
+            columns = [
+                "doc_id", "chunk_page_start", "chunk_page_end",
+                "document_title", "document_summary", "chunk_text"
+            ]
+            values_sql = ", ".join(["(%s, %s, %s, %s)"] * len(ranges))
+            query = sql.SQL(
+                """
+                SELECT requested.range_id, {}
+                FROM (VALUES {}) AS requested(range_id, doc_id, chunk_start, chunk_end)
+                JOIN {} AS chunks
+                  ON chunks.doc_id = requested.doc_id
+                 AND chunks.chunk_index BETWEEN requested.chunk_start AND requested.chunk_end
+                WHERE chunks.metadata @> %s::jsonb
+                ORDER BY requested.range_id, chunks.chunk_index
+                """
+            ).format(
+                sql.SQL(", ".join(f"chunks.{column}" for column in columns)),
+                sql.SQL(values_sql),
+                sql.Identifier(self.table_name),
+            )
+            metadata_query = self.format_query({})
+            params = tuple(
+                value
+                for range_id, (doc_id, chunk_start, chunk_end) in enumerate(ranges)
+                for value in (range_id, doc_id, chunk_start, chunk_end)
+            ) + (metadata_query,)
+            cur.execute(query, params)
+            result = cur.fetchall()
+
+        grouped_results = [[] for _ in ranges]
+        for row in result:
+            range_id = row[0]
+            grouped_results[range_id].append(
+                {columns[i]: row[i + 1] for i in range(len(columns))}
+            )
+        return grouped_results
+
     def get_all_doc_ids(self, supp_id: Optional[str] = None) -> list[str]:
         # Retrieve all document IDs from the Postgres table
         with self.postgres.get_db_connection() as conn:
