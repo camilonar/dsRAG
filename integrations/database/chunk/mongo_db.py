@@ -10,12 +10,12 @@ from integrations.utils.async_utils import sync
 class MongoDB(ChunkDB):
 
     def __init__(self, db_name: str, kb_id: str, uri: str, collection_name: str = None,
-                 mandatory_metadata: Optional[dict] = {}) -> None:
+                 mandatory_metadata: Optional[dict] = None) -> None:
         self.db_name = db_name
         self.kb_id = kb_id
         self.uri = uri
         self.mongo_db = MongoCrud(uri=uri, db_name=self.db_name)
-        self.mandatory_metadata = mandatory_metadata
+        self.mandatory_metadata = mandatory_metadata if mandatory_metadata else {}
 
         if collection_name is not None:
             self.collection_name = collection_name

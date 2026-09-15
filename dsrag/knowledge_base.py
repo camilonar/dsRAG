@@ -22,7 +22,7 @@ from dsrag.rse import (
     RSE_PARAMS_PRESETS,
 )
 from dsrag.database.vector import Vector, VectorDB, BasicVectorDB
-from dsrag.database.vector.types import MetadataFilter
+from dsrag.database.vector.types import MetadataFilter, MetadataFilters
 from dsrag.database.chunk import ChunkDB, BasicChunkDB
 from dsrag.embedding import Embedding, OpenAIEmbedding
 from dsrag.reranker import Reranker, CohereReranker
@@ -833,7 +833,7 @@ class KnowledgeBase:
         search_queries: list[str],
         rse_params: Union[Dict, str] = "balanced",
         latency_profiling: bool = False,
-        metadata_filter: Optional[MetadataFilter] = None,
+        metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
         return_mode: str = "text",
     ) -> list[dict]:
         """Query the knowledge base to retrieve relevant segments.
