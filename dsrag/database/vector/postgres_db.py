@@ -274,25 +274,59 @@ class PostgresVectorDB(VectorDB, DocLibrary):
                     filter_expression = format_metadata_filter(metadata_filter)
                     filter_value = metadata_filter['value']
 
-                query = sql.SQL(
-                    """
-                    SELECT metadata, embedding, (embedding <=> """
-                    + self.embedding_config["quantize_sql"]
-                    + """ ) AS cosine_distance
-                    FROM {}
-                    WHERE {}
-                    ORDER BY cosine_distance ASC
-                    LIMIT %s
-                    """
-                ).format(
-                    sql.Identifier(self.table_name),
-                    sql.SQL(filter_expression)
-                )
-
                 if isinstance(filter_value, list):
-                    params = (query_vector, *filter_value, top_k)
+                    filter_params = tuple(filter_value)
                 else:
-                    params = (query_vector, filter_value, top_k)
+                    filter_params = (filter_value,)
+
+                if (
+                    ("filters" in metadata_filter and any(
+                        f["field"] == "doc_id" for f in metadata_filter["filters"]
+                    ))
+                    or (
+                        "filters" not in metadata_filter
+                        and metadata_filter["field"] == "doc_id"
+                    )
+                ):
+                    # Filtering doc_ids before calculating vector distances will usually be
+                    # substantially faster for large tables (make sure to create an index).
+                    query = sql.SQL(
+                        """
+                        WITH filtered AS MATERIALIZED (
+                            SELECT metadata, embedding
+                            FROM {}
+                            WHERE {}
+                        )
+                        SELECT metadata, embedding, (embedding <=> """
+                        + self.embedding_config["quantize_sql"]
+                        + """ ) AS cosine_distance
+                        FROM filtered
+                        ORDER BY cosine_distance ASC
+                        LIMIT %s
+                        """
+                    ).format(
+                        sql.Identifier(self.table_name),
+                        sql.SQL(filter_expression)
+                    )
+                    params = (*filter_params, query_vector, top_k)
+                else:
+                    query = sql.SQL(
+                        """
+                        SELECT metadata, embedding, (embedding <=> """
+                        + self.embedding_config["quantize_sql"]
+                        + """ ) AS cosine_distance
+                        FROM {}
+                        WHERE {}
+                        ORDER BY cosine_distance ASC
+                        LIMIT %s
+                        """
+                    ).format(
+                        sql.Identifier(self.table_name),
+                        sql.SQL(filter_expression)
+                    )
+                    params = (query_vector, *filter_params, top_k)
+
+                cur.execute(query, params)
             else:
                 query = sql.SQL(
                     """
