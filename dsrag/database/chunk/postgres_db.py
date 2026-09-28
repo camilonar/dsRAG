@@ -5,19 +5,60 @@ from typing import Any, Optional
 from psycopg2._json import Json
 
 from dsrag.database.chunk.db import ChunkDB
-from dsrag.database.chunk.types import FormattedDocument
+from dsrag.database.chunk.types import ChunkSearchResult, FormattedDocument
 from integrations.database.postgres import Postgres
 
 
 class PostgresChunkDB(ChunkDB):
+    """PostgreSQL chunk storage with optional native FTS or Lakebase BM25."""
+
+    @classmethod
+    def _text_search_config(cls, text_search_type: Optional[str]) -> dict[str, Any]:
+        configs = {
+            "tsvector": {
+                "extension": None,
+                "index_method": "gin",
+                "index_suffix": "tsvector",
+            },
+            "bm25": {
+                "extension": "lakebase_text",
+                "index_method": "lakebase_bm25",
+                "index_suffix": "bm25",
+            },
+        }
+        if text_search_type is None:
+            return {}
+        try:
+            return configs[text_search_type]
+        except KeyError:
+            raise ValueError(
+                "TEXT_SEARCH_TYPE must be either None, 'tsvector', or 'bm25'"
+            )
+
     def __init__(self, kb_id: str, username: str, password: str, database: str, host: str="localhost", port: int = 5432,
-                 table_name: str = "", mandatory_metadata: dict = None, ssl_mode: str = "require") -> None:
+                 table_name: str = "", mandatory_metadata: dict = None, ssl_mode: str = "require",
+                 text_search_type: Optional[str] = "tsvector", text_search_config: str = "english",
+                 enable_text_search: Optional[bool] = None) -> None:
         self.kb_id = kb_id
         self.username = username
         self.password = password
         self.database = database
         self.host = host
         self.port = port
+        # ``enable_text_search`` is retained as a compatibility alias for the
+        # previous boolean API. New configurations should use
+        # ``text_search_type``.
+        if enable_text_search is not None:
+            legacy_type = "bm25" if enable_text_search else None
+            if text_search_type not in (None, legacy_type):
+                raise ValueError(
+                    "Specify either text_search_type or enable_text_search, not both"
+                )
+            text_search_type = legacy_type
+        self.text_search_type = text_search_type
+        self.text_search_config_options = self._text_search_config(text_search_type)
+        self.enable_text_search = text_search_type is not None
+        self.text_search_config = text_search_config
         self.last_connection = time.time()
 
         connection_params = {
@@ -36,6 +77,12 @@ class PostgresChunkDB(ChunkDB):
             self.table_name = f"{kb_id}_documents"
         else:
             self.table_name = table_name
+        if self.text_search_type:
+            self.text_search_index_name = (
+                f"{self.table_name}_{self.text_search_config_options['index_suffix']}"
+            )
+        else:
+            self.text_search_index_name = ""
         self.mandatory_metadata = mandatory_metadata if mandatory_metadata else {}
 
         self.columns = [
@@ -57,17 +104,41 @@ class PostgresChunkDB(ChunkDB):
 
         # Create a table for this kb_id if it doesn't exist
         with self.postgres.get_db_connection() as conn:
+            from psycopg2 import sql
+
             cur = conn.cursor()
             cur.execute(f"SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = '{self.table_name}')")
             exists = cur.fetchone()[0]
 
             if not exists:
+                if self.text_search_type == "bm25":
+                    cur.execute("CREATE EXTENSION IF NOT EXISTS lakebase_text")
+
                 # Create a table for this kb_id
-                query_statement = f"CREATE TABLE {self.table_name} ("
+                column_definitions = []
                 for column in self.columns:
-                    query_statement += f"{column['name']} {column['type']}, "
-                query_statement = query_statement[:-2] + ")"
-                cur.execute(query_statement)
+                    column_definitions.append(
+                        sql.SQL("{} {}").format(
+                            sql.Identifier(column["name"]),
+                            sql.SQL(column["type"]),
+                        )
+                    )
+                if self.enable_text_search:
+                    column_definitions.append(
+                        sql.SQL(
+                            "search_vector TSVECTOR GENERATED ALWAYS AS "
+                            "(to_tsvector({}::regconfig, "
+                            "coalesce(chunk_text, '') || ' ' || "
+                            "coalesce(document_title, '') || ' ' || "
+                            "coalesce(section_title, ''))) STORED"
+                        ).format(sql.Literal(self.text_search_config))
+                    )
+                cur.execute(
+                    sql.SQL("CREATE TABLE {} ({})").format(
+                        sql.Identifier(self.table_name),
+                        sql.SQL(", ").join(column_definitions),
+                    )
+                )
                 conn.commit()
             else:
                 # Check if we need to add any columns to the table. This happens if the columns have been updated
@@ -78,6 +149,70 @@ class PostgresChunkDB(ChunkDB):
                     if column["name"] not in column_names:
                         # Add the column to the table
                         cur.execute("ALTER TABLE {}_chunks ADD COLUMN {} {}".format(kb_id, column["name"], column["type"]))
+
+            if self.text_search_type == "bm25":
+                cur.execute("CREATE EXTENSION IF NOT EXISTS lakebase_text")
+            if self.text_search_type:
+                self._ensure_text_search_column(cur)
+                self._ensure_text_search_index(cur)
+                conn.commit()
+
+    def _ensure_text_search_column(self, cur) -> None:
+        """Add the generated search vector to an existing chunk table."""
+        from psycopg2 import sql
+
+        cur.execute(
+            "SELECT EXISTS ("
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = %s "
+            "AND column_name = 'search_vector')",
+            (self.table_name,),
+        )
+        if cur.fetchone()[0]:
+            return
+
+        cur.execute(
+            sql.SQL(
+                "ALTER TABLE {} ADD COLUMN search_vector TSVECTOR "
+                "GENERATED ALWAYS AS (to_tsvector({}::regconfig, "
+                "coalesce(chunk_text, '') || ' ' || "
+                "coalesce(document_title, '') || ' ' || "
+                "coalesce(section_title, ''))) STORED"
+            ).format(
+                sql.Identifier(self.table_name),
+                sql.Literal(self.text_search_config),
+            )
+        )
+
+    def _ensure_text_search_index(self, cur) -> bool:
+        """Create the selected text index once the table has chunks to index."""
+        from psycopg2 import sql
+
+        cur.execute(
+            "SELECT EXISTS ("
+            "SELECT 1 FROM pg_indexes "
+            "WHERE schemaname = 'public' AND indexname = %s)",
+            (self.text_search_index_name,),
+        )
+        if cur.fetchone()[0]:
+            return True
+
+        cur.execute(
+            sql.SQL("SELECT EXISTS (SELECT 1 FROM {} LIMIT 1)").format(
+                sql.Identifier(self.table_name)
+            )
+        )
+        if not cur.fetchone()[0]:
+            return False
+
+        cur.execute(
+            sql.SQL("CREATE INDEX {} ON {} USING {} (search_vector)").format(
+                sql.Identifier(self.text_search_index_name),
+                sql.Identifier(self.table_name),
+                sql.SQL(self.text_search_config_options["index_method"]),
+            )
+        )
+        return True
 
     def format_query(self, query: dict) -> str:
         # This method assumes the resulting dict is going to be used in a 'WHERE metadata @> %s' style query
@@ -130,6 +265,102 @@ class PostgresChunkDB(ChunkDB):
             metadata_query = self.format_query({})
             cur.execute(f"DELETE FROM {self.table_name} WHERE doc_id='{doc_id}' AND metadata @> '{metadata_query}'")
             conn.commit()
+
+    def supports_text_search(self) -> bool:
+        """Return whether Lakebase BM25 search was enabled for this table."""
+        return self.text_search_type is not None
+
+    def search(
+        self,
+        query: str,
+        top_k: int = 10,
+        metadata_filter: Optional[dict[str, Any]] = None,
+    ) -> list[ChunkSearchResult]:
+        """Search chunk text, document titles, and section titles."""
+        if not self.text_search_type:
+            raise NotImplementedError(
+                "Enable text search with text_search_type='tsvector' or "
+                "text_search_type='bm25' when creating PostgresChunkDB"
+            )
+        if top_k <= 0 or not query or not query.strip():
+            return []
+
+        with self.postgres.get_db_connection() as conn:
+            from psycopg2 import sql
+
+            cur = conn.cursor()
+            if not self._ensure_text_search_index(cur):
+                return []
+
+            metadata_query = self.format_query(metadata_filter or {})
+            if self.text_search_type == "bm25":
+                score_sql = (
+                    "(search_vector <@> to_bm25query("
+                    "to_tsvector({}::regconfig, %s), %s))"
+                )
+                score_params = (query, self.text_search_index_name)
+                order_sql = "ASC"
+            else:
+                score_sql = (
+                    "ts_rank_cd(search_vector, "
+                    "websearch_to_tsquery({}::regconfig, %s))"
+                )
+                score_params = (query,)
+                order_sql = "DESC"
+
+            query_statement = sql.SQL(
+                "SELECT doc_id, chunk_index, chunk_text, document_title, "
+                "section_title, chunk_page_start, chunk_page_end, metadata, "
+                + score_sql
+                + " AS bm25_score FROM {} "
+                "WHERE search_vector @@ websearch_to_tsquery({}::regconfig, %s) "
+                "AND metadata @> %s::jsonb "
+                "ORDER BY bm25_score "
+                + order_sql
+                + ", doc_id ASC, chunk_index ASC LIMIT %s"
+            ).format(
+                sql.Literal(self.text_search_config),
+                sql.Identifier(self.table_name),
+                sql.Literal(self.text_search_config),
+            )
+            cur.execute(
+                query_statement,
+                (*score_params, query, metadata_query, top_k),
+            )
+            rows = cur.fetchall()
+
+        results: list[ChunkSearchResult] = []
+        for rank, row in enumerate(rows, start=1):
+            (
+                doc_id,
+                chunk_index,
+                chunk_text,
+                document_title,
+                section_title,
+                chunk_page_start,
+                chunk_page_end,
+                metadata,
+                text_score,
+            ) = row
+            results.append(
+                ChunkSearchResult(
+                    doc_id=doc_id,
+                    chunk_index=chunk_index,
+                    chunk_text=chunk_text,
+                    document_title=document_title,
+                    section_title=section_title,
+                    chunk_page_start=chunk_page_start,
+                    chunk_page_end=chunk_page_end,
+                    metadata=metadata or {},
+                    score=(
+                        float(-text_score)
+                        if self.text_search_type == "bm25"
+                        else float(text_score)
+                    ),
+                    rank=rank,
+                )
+            )
+        return results
 
     def get_document(
         self, doc_id: str, include_content: bool = False
@@ -404,5 +635,7 @@ class PostgresChunkDB(ChunkDB):
             "database": self.database,
             "host": self.host,
             "port": self.port,
-            "table_name": self.table_name
+            "table_name": self.table_name,
+            "text_search_type": self.text_search_type,
+            "text_search_config": self.text_search_config,
         }

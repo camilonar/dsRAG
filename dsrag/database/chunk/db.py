@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Optional, Sequence
 
-from dsrag.database.chunk.types import FormattedDocument
+from dsrag.database.chunk.types import ChunkSearchResult, FormattedDocument
 
 
 class ChunkDB(ABC):
@@ -117,6 +117,26 @@ class ChunkDB(ABC):
         Delete the chunk database.
         """
         pass
+
+    def supports_text_search(self) -> bool:
+        """Whether this backend provides full-text search over its chunks."""
+        return False
+
+    def search(
+        self,
+        query: str,
+        top_k: int = 10,
+        metadata_filter: Optional[dict[str, Any]] = None,
+    ) -> list[ChunkSearchResult]:
+        """Search chunks by text when the backend provides that capability.
+
+        Text search is optional because not every chunk backend has a full-text
+        index. Implementations that support it should override this method and
+        :meth:`supports_text_search`.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not provide text search"
+        )
 
     def get_segments_in_range(self, doc_id: str, chunk_start: int, chunk_end: int) -> list[dict]:
         """

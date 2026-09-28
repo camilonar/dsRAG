@@ -297,7 +297,7 @@ class PostgresVectorDB(VectorDB, DocLibrary):
                             FROM {}
                             WHERE {}
                         )
-                        SELECT metadata, embedding, (embedding <=> """
+                        SELECT metadata, (embedding <=> """
                         + self.embedding_config["quantize_sql"]
                         + """ ) AS cosine_distance
                         FROM filtered
@@ -312,7 +312,7 @@ class PostgresVectorDB(VectorDB, DocLibrary):
                 else:
                     query = sql.SQL(
                         """
-                        SELECT metadata, embedding, (embedding <=> """
+                        SELECT metadata, (embedding <=> """
                         + self.embedding_config["quantize_sql"]
                         + """ ) AS cosine_distance
                         FROM {}
