@@ -27,7 +27,9 @@ def __create_kb(kb_id: str, metadata_storage: MetadataStorage, mandatory_metadat
                                      vector_dimension=env.EMBEDDING_MODEL_DIM, table_name=f"{base_name}_vector")
         chunk_db = PostgresChunkDB(kb_id=kb_id, username=env.POSTGRES_USERNAME, password=env.POSTGRES_PASSWORD,
                                    database=env.POSTGRES_DB_NAME, host=env.POSTGRES_HOST, port=env.POSTGRES_PORT,
-                                   table_name=f"{base_name}_chunks")
+                                   table_name=f"{base_name}_chunks",
+                                   text_search_type=env.POSTGRES_TEXT_SEARCH_TYPE,
+                                   text_search_config=env.POSTGRES_TEXT_SEARCH_CONFIG)
     else:
         raise ValueError(f"Unsupported DB Engine {env.DB_ENGINE}")
 

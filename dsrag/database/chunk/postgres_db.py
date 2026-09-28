@@ -38,27 +38,15 @@ class PostgresChunkDB(ChunkDB):
 
     def __init__(self, kb_id: str, username: str, password: str, database: str, host: str="localhost", port: int = 5432,
                  table_name: str = "", mandatory_metadata: dict = None, ssl_mode: str = "require",
-                 text_search_type: Optional[str] = "tsvector", text_search_config: str = "english",
-                 enable_text_search: Optional[bool] = None) -> None:
+                 text_search_type: Optional[str] = "tsvector", text_search_config: str = "english") -> None:
         self.kb_id = kb_id
         self.username = username
         self.password = password
         self.database = database
         self.host = host
         self.port = port
-        # ``enable_text_search`` is retained as a compatibility alias for the
-        # previous boolean API. New configurations should use
-        # ``text_search_type``.
-        if enable_text_search is not None:
-            legacy_type = "bm25" if enable_text_search else None
-            if text_search_type not in (None, legacy_type):
-                raise ValueError(
-                    "Specify either text_search_type or enable_text_search, not both"
-                )
-            text_search_type = legacy_type
         self.text_search_type = text_search_type
         self.text_search_config_options = self._text_search_config(text_search_type)
-        self.enable_text_search = text_search_type is not None
         self.text_search_config = text_search_config
         self.last_connection = time.time()
 
@@ -124,7 +112,7 @@ class PostgresChunkDB(ChunkDB):
                             sql.SQL(column["type"]),
                         )
                     )
-                if self.enable_text_search:
+                if self.text_search_type is not None:
                     column_definitions.append(
                         sql.SQL(
                             "search_vector TSVECTOR GENERATED ALWAYS AS "

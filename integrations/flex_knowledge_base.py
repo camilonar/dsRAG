@@ -95,6 +95,37 @@ class FlexKnowledgeBase(KnowledgeBase):
             semantic_sectioning_config, chunking_config, chunk_size, min_length_for_chunking, supp_id,
             metadata)
 
+    def add_document_text_only(
+            self,
+            doc_id: str,
+            text: str = "",
+            file_path: str = "",
+            document_title: str = "",
+            file_parsing_config: dict = {},
+            chunking_config: dict = {},
+            chunk_size: int = None,
+            min_length_for_chunking: int = None,
+            supp_id: str = "",
+            metadata: dict = {},
+    ):
+        """Add a document without LLM calls, embeddings, or vector storage."""
+        metadata = {
+            **(metadata or {}),
+            **self.kb_metadata["mandatory_metadata"],
+        }
+        return super().add_document_text_only(
+            doc_id=doc_id,
+            text=text,
+            file_path=file_path,
+            document_title=document_title,
+            file_parsing_config=file_parsing_config,
+            chunking_config=chunking_config,
+            chunk_size=chunk_size,
+            min_length_for_chunking=min_length_for_chunking,
+            supp_id=supp_id,
+            metadata=metadata,
+        )
+
     def _search(
             self,
             query: str,
@@ -104,7 +135,7 @@ class FlexKnowledgeBase(KnowledgeBase):
     ) -> list:
         filters = self._get_metadata_filters(metadata_filter)
         if search_mode == "text":
-            return KnowledgeBase._search(self, query, top_k, filters, search_mode="text")
+            return super()._search(self, query, top_k, filters, search_mode="text")
         if search_mode == "hybrid":
             raise NotImplementedError("Hybrid search is not implemented yet")
         if search_mode != "vector":

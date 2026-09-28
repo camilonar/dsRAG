@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Body
 from fastapi.params import Query, Depends
@@ -16,7 +16,13 @@ cache_kb = {} # Small cache to store Knowledge bases that have been recently use
 file_system = kb_creation.create_file_system()
 
 @router.get("/search")
-async def search(query: SearchDocumentModel = Depends()) -> list[dict]:
+async def search(
+    query: SearchDocumentModel = Depends(),
+    search_mode: Literal["vector", "text", "hybrid"] = Query(
+        "vector",
+        description="Search mode: vector, text, or hybrid.",
+    ),
+) -> list[dict]:
     """
     Searches on the Knowledge Base
 
@@ -32,12 +38,26 @@ async def search(query: SearchDocumentModel = Depends()) -> list[dict]:
     in_filters = query.model_dump(include={"doc_ids"}, exclude_defaults=True, exclude_none=True)
     for k, v in in_filters.items():
         mfilters["filters"].append(MetadataFilter(field=k[:-1], operator="in", value=v))
-    results = kb.query(search_queries, return_mode="simplified_text", metadata_filter=mfilters)
+    results = kb.query(
+        search_queries,
+        return_mode="simplified_text",
+        metadata_filter=mfilters,
+        search_mode=search_mode,
+    )
 
     return results
 
 @router.post("/docs")
-async def add_document(doc_id: str, kb_id: Optional[str] = None, is_local: bool = False, data: AddDocumentModel = Body(...)) -> dict:
+async def add_document(
+    doc_id: str,
+    kb_id: Optional[str] = None,
+    is_local: bool = False,
+    text_only: bool = Query(
+        False,
+        description="Add the document without LLM calls or embeddings.",
+    ),
+    data: AddDocumentModel = Body(...),
+) -> dict:
     """
     Adds a document to the Knowledge Base
 
@@ -46,7 +66,8 @@ async def add_document(doc_id: str, kb_id: Optional[str] = None, is_local: bool 
      default KB will be used
     :param data: additional data of the document
     :param is_local: indicates if the file is already on the local system, which means that the downloading step
-    can be skipped
+     can be skipped
+    :param text_only: adds the document without LLM calls or embeddings
     """
     kb_name = kb_id if kb_id else env.KB_NAME
     if not is_local:
@@ -55,7 +76,10 @@ async def add_document(doc_id: str, kb_id: Optional[str] = None, is_local: bool 
         file_path = f"{kb_name}/{doc_id}/{doc_id}"
 
     kb = _create_or_retrieve_kb(kb_name)
-    kb.add_document(doc_id=doc_id, file_path=file_path, metadata=data.metadata)
+    if text_only:
+        kb.add_document_text_only(doc_id=doc_id, file_path=file_path, metadata=data.metadata)
+    else:
+        kb.add_document(doc_id=doc_id, file_path=file_path, metadata=data.metadata)
 
     if os.path.exists(file_path):
        os.remove(file_path)
