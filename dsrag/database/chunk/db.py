@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Optional, Sequence
 
 from dsrag.database.chunk.types import ChunkSearchResult, FormattedDocument
+from dsrag.database.vector.types import MetadataFilter, MetadataFilters
 
 
 class ChunkDB(ABC):
@@ -126,7 +127,7 @@ class ChunkDB(ABC):
         self,
         query: str,
         top_k: int = 10,
-        metadata_filter: Optional[dict[str, Any]] = None,
+        metadata_filter: Optional[dict[str, Any] | MetadataFilter | MetadataFilters] = None,
     ) -> list[ChunkSearchResult]:
         """Search chunks by text when the backend provides that capability.
 

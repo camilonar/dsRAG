@@ -95,26 +95,49 @@ class FlexKnowledgeBase(KnowledgeBase):
             semantic_sectioning_config, chunking_config, chunk_size, min_length_for_chunking, supp_id,
             metadata)
 
-    def _search(self, query: str, top_k: int,
-                metadata_filter: Optional[MetadataFilter | MetadataFilters] = None) -> list:
+    def _search(
+            self,
+            query: str,
+            top_k: int,
+            metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
+            search_mode: str = "vector",
+    ) -> list:
+        filters = self._get_metadata_filters(metadata_filter)
+        if search_mode == "text":
+            return KnowledgeBase._search(self, query, top_k, filters, search_mode="text")
+        if search_mode == "hybrid":
+            raise NotImplementedError("Hybrid search is not implemented yet")
+        if search_mode != "vector":
+            raise ValueError(
+                "search_mode must be one of 'vector', 'text', or 'hybrid'"
+            )
+
         query_vector = self._get_embeddings([query], input_type="query")[0]
 
+        search_results = self.vector_db.search(query_vector, top_k, filters)
+        if len(search_results) == 0:
+            return []
+        search_results = self.reranker.rerank_search_results(query, search_results)
+        return search_results
+
+    def _get_metadata_filters(
+            self,
+            metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
+    ) -> MetadataFilters:
+        """Format mandatory and user filters for either search backend."""
         filters = MetadataFilters(filters=[], operator="and")
 
-        m_metadata = self.kb_metadata["mandatory_metadata"]
-        for k, v in m_metadata.items():
-            filters["filters"].append(MetadataFilter(field=k, operator="equals", value=v))
+        for field, value in self.kb_metadata["mandatory_metadata"].items():
+            filters["filters"].append(
+                MetadataFilter(field=field, operator="equals", value=value)
+            )
 
         if metadata_filter:
             if "filters" in metadata_filter:
                 filters["filters"].extend(metadata_filter["filters"])
             else:
                 filters["filters"].append(metadata_filter)
-        search_results = self.vector_db.search(query_vector, top_k, filters)
-        if len(search_results) == 0:
-            return []
-        search_results = self.reranker.rerank_search_results(query, search_results)
-        return search_results
+        return filters
 
     def _get_segments_content(self, relevant_segment_info: list[dict], return_mode: str):
         return_modes = []

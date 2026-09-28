@@ -6,6 +6,7 @@ from psycopg2._json import Json
 
 from dsrag.database.chunk.db import ChunkDB
 from dsrag.database.chunk.types import ChunkSearchResult, FormattedDocument
+from dsrag.database.vector.types import MetadataFilter, MetadataFilters
 from integrations.database.postgres import Postgres
 
 
@@ -218,6 +219,74 @@ class PostgresChunkDB(ChunkDB):
         # This method assumes the resulting dict is going to be used in a 'WHERE metadata @> %s' style query
         return json.dumps(query | self.mandatory_metadata)
 
+    def _format_text_metadata_filter(
+        self,
+        metadata_filter: Optional[dict[str, Any] | MetadataFilter | MetadataFilters],
+    ) -> tuple[str, list[Any]]:
+        """Format vector-style metadata filters for a text-search query."""
+        if metadata_filter is None:
+            return "metadata @> %s::jsonb", [self.format_query({})]
+
+        if "filters" not in metadata_filter and "field" not in metadata_filter:
+            return "metadata @> %s::jsonb", [self.format_query(metadata_filter)]
+
+        if "filters" in metadata_filter:
+            filters = metadata_filter["filters"]
+            operator = metadata_filter["operator"]
+            if operator not in ("and", "or"):
+                raise ValueError(f"Unsupported metadata filter operator: {operator}")
+        else:
+            filters = [metadata_filter]
+            operator = "and"
+
+        filter_expressions = []
+        filter_params: list[Any] = []
+        for metadata_item in filters:
+            expression, params = self._format_text_metadata_item(metadata_item)
+            filter_expressions.append(expression)
+            filter_params.extend(params)
+
+        if not filter_expressions:
+            return "metadata @> %s::jsonb", [self.format_query({})]
+
+        mandatory_condition = "metadata @> %s::jsonb"
+        condition = (
+            f"{mandatory_condition} AND ({f' {operator.upper()} '.join(filter_expressions)})"
+        )
+        return condition, [self.format_query({}), *filter_params]
+
+    @staticmethod
+    def _format_text_metadata_item(metadata_item: MetadataFilter) -> tuple[str, list[Any]]:
+        field = metadata_item["field"]
+        operator = metadata_item["operator"]
+        value = metadata_item["value"]
+        field_expression = "metadata ->> %s"
+
+        operator_map = {
+            "equals": "=",
+            "not_equals": "!=",
+            "greater_than": ">",
+            "less_than": "<",
+            "greater_than_equals": ">=",
+            "less_than_equals": "<=",
+        }
+        if operator in operator_map:
+            return (
+                f"{field_expression} {operator_map[operator]} %s",
+                [field, str(value)],
+            )
+        if operator in ("in", "not_in"):
+            values = value if isinstance(value, list) else [value]
+            if not values:
+                return ("TRUE" if operator == "not_in" else "FALSE"), []
+            sql_operator = "IN" if operator == "in" else "NOT IN"
+            placeholders = ", ".join(["%s"] * len(values))
+            return (
+                f"{field_expression} {sql_operator} ({placeholders})",
+                [field, *[str(item) for item in values]],
+            )
+        raise ValueError(f"Unsupported metadata filter operator: {operator}")
+
     def add_document(self, doc_id: str, chunks: dict[int, dict[str, Any]], supp_id: str = "", metadata: dict = None) -> None:
         if not metadata:
             metadata = {}
@@ -258,6 +327,10 @@ class PostgresChunkDB(ChunkDB):
 
                 conn.commit()
 
+            if self.text_search_type:
+                self._ensure_text_search_index(cur)
+                conn.commit()
+
     def remove_document(self, doc_id: str) -> None:
         # Remove the docs from the sqlite table
         with self.postgres.get_db_connection() as conn:
@@ -274,7 +347,7 @@ class PostgresChunkDB(ChunkDB):
         self,
         query: str,
         top_k: int = 10,
-        metadata_filter: Optional[dict[str, Any]] = None,
+        metadata_filter: Optional[dict[str, Any] | MetadataFilter | MetadataFilters] = None,
     ) -> list[ChunkSearchResult]:
         """Search chunk text, document titles, and section titles."""
         if not self.text_search_type:
@@ -292,7 +365,9 @@ class PostgresChunkDB(ChunkDB):
             if not self._ensure_text_search_index(cur):
                 return []
 
-            metadata_query = self.format_query(metadata_filter or {})
+            metadata_condition, metadata_params = self._format_text_metadata_filter(
+                metadata_filter
+            )
             if self.text_search_type == "bm25":
                 score_sql = (
                     "(search_vector <@> to_bm25query("
@@ -312,10 +387,11 @@ class PostgresChunkDB(ChunkDB):
                 "SELECT doc_id, chunk_index, chunk_text, document_title, "
                 "section_title, chunk_page_start, chunk_page_end, metadata, "
                 + score_sql
-                + " AS bm25_score FROM {} "
+                + " AS text_score FROM {} "
                 "WHERE search_vector @@ websearch_to_tsquery({}::regconfig, %s) "
-                "AND metadata @> %s::jsonb "
-                "ORDER BY bm25_score "
+                "AND "
+                + metadata_condition
+                + " ORDER BY text_score "
                 + order_sql
                 + ", doc_id ASC, chunk_index ASC LIMIT %s"
             ).format(
@@ -325,7 +401,7 @@ class PostgresChunkDB(ChunkDB):
             )
             cur.execute(
                 query_statement,
-                (*score_params, query, metadata_query, top_k),
+                (*score_params, query, *metadata_params, top_k),
             )
             rows = cur.fetchall()
 

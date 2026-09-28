@@ -743,11 +743,46 @@ class KnowledgeBase:
         """
         return np.dot(v1, v2)
 
-    def _search(self, query: str, top_k: int, metadata_filter: Optional[MetadataFilter] = None) -> list:
+    def _search(
+        self,
+        query: str,
+        top_k: int,
+        metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
+        search_mode: str = "vector",
+    ) -> list:
         """Search the knowledge base for relevant chunks.
 
         Internal method for single query search.
         """
+        if search_mode == "text":
+            search_results = self.chunk_db.search(
+                query, top_k, metadata_filter
+            )
+            formatted_results = []
+            for result in search_results:
+                metadata = dict(result.get("metadata") or {})
+                document_title = result.get("document_title") or ""
+                section_title = result.get("section_title") or ""
+                metadata.update(
+                    {
+                        "doc_id": result["doc_id"],
+                        "chunk_index": result["chunk_index"],
+                        "chunk_text": result["chunk_text"],
+                        "chunk_header": f"{document_title} {section_title}".strip(),
+                    }
+                )
+                formatted_results.append(
+                    {
+                        "doc_id": result["doc_id"],
+                        "vector": None,
+                        "metadata": metadata,
+                        "similarity": result["score"],
+                    }
+                )
+            if len(formatted_results) == 0:
+                return []
+            return self.reranker.rerank_search_results(query, formatted_results)
+
         query_vector = self._get_embeddings([query], input_type="query")[0]
         search_results = self.vector_db.search(query_vector, top_k, metadata_filter)
         if len(search_results) == 0:
@@ -755,20 +790,34 @@ class KnowledgeBase:
         search_results = self.reranker.rerank_search_results(query, search_results)
         return search_results
 
-    def _get_all_ranked_results(self, search_queries: list[str], metadata_filter: Optional[MetadataFilter] = None):
+    def _get_all_ranked_results(
+        self,
+        search_queries: list[str],
+        metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
+        search_mode: str = "vector",
+    ):
         """Execute multiple search queries.
 
         Internal method for parallel query execution.
         """
+        if search_mode == "text":
+            return [
+                self._search(query, 200, metadata_filter, search_mode)
+                for query in search_queries
+            ]
+
         if self.vector_db.is_async():
             all_ranked_results = []
             for query in search_queries:
-                ranked_results = self._search(query, 20, metadata_filter)
+                ranked_results = self._search(
+                    query, 20, metadata_filter, search_mode
+                )
                 all_ranked_results.append(ranked_results)
             return all_ranked_results
         else:
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = [executor.submit(self._search, query, 200, metadata_filter) for query in search_queries]
+                futures = [executor.submit(self._search, query, 200, metadata_filter, search_mode)
+                           for query in search_queries]
                 all_ranked_results = []
                 for future in futures:
                     ranked_results = future.result()
@@ -835,6 +884,7 @@ class KnowledgeBase:
         latency_profiling: bool = False,
         metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
         return_mode: str = "text",
+        search_mode: str = "vector",
     ) -> list[dict]:
         """Query the knowledge base to retrieve relevant segments.
 
@@ -877,6 +927,10 @@ class KnowledgeBase:
                 - "page_images": Return list of page image paths
                 - "dynamic": Choose format based on content type
                 Defaults to "text".
+            search_mode (str, optional): Search strategy. ``"vector"`` uses
+                semantic vector search, ``"text"`` uses the chunk database's
+                full-text search, and ``"hybrid"`` is reserved for a future
+                implementation. Defaults to "vector".
 
         Returns:
             list[dict]: List of segment information dictionaries, ordered by relevance.
@@ -932,8 +986,16 @@ class KnowledgeBase:
                 "rse_params": rse_params if isinstance(rse_params, dict) else {"preset": rse_params},
                 "metadata_filter": metadata_filter,
                 "return_mode": return_mode,
+                "search_mode": search_mode,
                 "reranker_model": self.reranker.__class__.__name__
             })
+
+            if search_mode == "hybrid":
+                raise NotImplementedError("Hybrid search is not implemented yet")
+            if search_mode not in ("vector", "text"):
+                raise ValueError(
+                    "search_mode must be one of 'vector', 'text', or 'hybrid'"
+                )
             
             # check if the rse_params is a preset name and convert it to a dictionary if it is
             if isinstance(rse_params, str) and rse_params in RSE_PARAMS_PRESETS:
@@ -972,7 +1034,11 @@ class KnowledgeBase:
 
             # --- Search/Rerank Step ---
             step_start_time = time.perf_counter()
-            all_ranked_results = self._get_all_ranked_results(search_queries=search_queries, metadata_filter=metadata_filter)
+            all_ranked_results = self._get_all_ranked_results(
+                search_queries=search_queries,
+                metadata_filter=metadata_filter,
+                search_mode=search_mode,
+            )
             step_duration = time.perf_counter() - step_start_time
             
             # Get the number of initial results per query
