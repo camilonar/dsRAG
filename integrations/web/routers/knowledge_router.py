@@ -108,7 +108,7 @@ async def find_doc_ids(doc_id: str = Query(..., min_length=3), kb_id: Optional[s
     Finds the available document IDs
     """
     kb = _create_or_retrieve_kb(kb_id)
-    doc_ids = kb.vector_db.find_doc_ids_like(doc_id, limit=20)
+    doc_ids = kb.chunk_db.find_doc_ids_like(doc_id, limit=20)
     return doc_ids
 
 def _create_or_retrieve_kb(kb_id: Optional[str] = None) -> KnowledgeBase:

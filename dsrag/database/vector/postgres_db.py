@@ -378,26 +378,21 @@ class PostgresVectorDB(VectorDB, DocLibrary):
         with self.postgres.get_db_connection() as conn:
             from psycopg2 import sql
             cur = conn.cursor()
-            query = f"%{query}%"
-            if not self.mandatory_metadata:
-                query_sql = sql.SQL("""SELECT DISTINCT(metadata ->> 'doc_id') as doc_id
-                                    FROM {}
-                                    WHERE (metadata ->> 'doc_id') ILIKE %s
-                                    ORDER BY doc_id
-                                    LIMIT %s""").format(sql.Identifier(self.table_name))
-                cur.execute(query_sql, (query, limit))
-            else:
-                query_sql = sql.SQL("""SELECT DISTINCT(metadata ->> 'doc_id') as doc_id
-                                    FROM {}
-                                    WHERE (metadata ->> 'doc_id') ILIKE %s
-                                    AND metadata @> %s
-                                    ORDER BY doc_id
-                                    LIMIT %s""").format(sql.Identifier(self.table_name))
-                condition = self.format_query({})
-                cur.execute(query_sql, (query, json.dumps(condition), 20))
-            results = cur.fetchall()
-            doc_ids = [r[0] for r in results]
-            return doc_ids
+            query_pattern = f"%{query}%"
+            where_clause = "(metadata ->> 'doc_id') ILIKE %s"
+            params = [query_pattern]
+
+            if self.mandatory_metadata:
+                where_clause += " AND metadata @> %s"
+                params.append(json.dumps(self.format_query({})))
+
+            query_sql = sql.SQL(
+                "SELECT DISTINCT(metadata ->> 'doc_id') as doc_id "
+                "FROM {} WHERE " + where_clause + " "
+                "ORDER BY doc_id LIMIT %s"
+            ).format(sql.Identifier(self.table_name))
+            cur.execute(query_sql, (*params, limit))
+            return [row[0] for row in cur.fetchall()]
 
     def to_dict(self):
         return {

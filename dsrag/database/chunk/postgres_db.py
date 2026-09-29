@@ -315,10 +315,6 @@ class PostgresChunkDB(ChunkDB):
 
                 conn.commit()
 
-            if self.text_search_type:
-                self._ensure_text_search_index(cur)
-                conn.commit()
-
     def remove_document(self, doc_id: str) -> None:
         # Remove the docs from the sqlite table
         with self.postgres.get_db_connection() as conn:
@@ -326,6 +322,28 @@ class PostgresChunkDB(ChunkDB):
             metadata_query = self.format_query({})
             cur.execute(f"DELETE FROM {self.table_name} WHERE doc_id='{doc_id}' AND metadata @> '{metadata_query}'")
             conn.commit()
+
+    def find_doc_ids_like(self, query: str, limit: int = 20) -> list[str]:
+        """Return document IDs containing ``query``, subject to mandatory metadata."""
+        with self.postgres.get_db_connection() as conn:
+            from psycopg2 import sql
+
+            cur = conn.cursor()
+            query_pattern = f"%{query}%"
+            where_clause = "doc_id ILIKE %s"
+            params = [query_pattern]
+
+            if self.mandatory_metadata:
+                where_clause += " AND metadata @> %s"
+                params.append(json.dumps(self.format_query({})))
+
+            query_sql = sql.SQL(
+                "SELECT DISTINCT doc_id FROM {} "
+                "WHERE " + where_clause + " "
+                "ORDER BY doc_id LIMIT %s"
+            ).format(sql.Identifier(self.table_name))
+            cur.execute(query_sql, (*params, limit))
+            return [row[0] for row in cur.fetchall()]
 
     def supports_text_search(self) -> bool:
         """Return whether Lakebase BM25 search was enabled for this table."""
