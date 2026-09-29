@@ -12,6 +12,7 @@ from integrations.database.postgres import Postgres
 # Lazy load PostgreSQL dependencies
 psycopg2 = LazyLoader("psycopg2", "psycopg2-binary")
 pgvector = LazyLoader("pgvector")
+MAX_VECTORS_PER_BATCH = 30
 
 # We'll import register_vector when needed to avoid immediate import
 
@@ -234,7 +235,7 @@ class PostgresVectorDB(VectorDB, DocLibrary):
             ).format(
                 sql.Identifier(self.table_name)).as_string(cur)
 
-            cur.executemany(insert_sql, data_to_insert)
+            psycopg2.extras.execute_batch(cur, insert_sql, data_to_insert, page_size=MAX_VECTORS_PER_BATCH)
             conn.commit()
 
     def remove_document(self, doc_id):
