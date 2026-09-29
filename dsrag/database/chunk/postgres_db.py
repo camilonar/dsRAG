@@ -209,14 +209,11 @@ class PostgresChunkDB(ChunkDB):
 
     def _format_text_metadata_filter(
         self,
-        metadata_filter: Optional[dict[str, Any] | MetadataFilter | MetadataFilters],
+        metadata_filter: Optional[MetadataFilter | MetadataFilters],
     ) -> tuple[str, list[Any]]:
         """Format vector-style metadata filters for a text-search query."""
         if metadata_filter is None:
             return "metadata @> %s::jsonb", [self.format_query({})]
-
-        if "filters" not in metadata_filter and "field" not in metadata_filter:
-            return "metadata @> %s::jsonb", [self.format_query(metadata_filter)]
 
         if "filters" in metadata_filter:
             filters = metadata_filter["filters"]
@@ -229,8 +226,11 @@ class PostgresChunkDB(ChunkDB):
 
         filter_expressions = []
         filter_params: list[Any] = []
+        table_column_names = {column["name"] for column in self.columns}
         for metadata_item in filters:
-            expression, params = self._format_text_metadata_item(metadata_item)
+            expression, params = self._format_text_metadata_item(
+                metadata_item, table_column_names
+            )
             filter_expressions.append(expression)
             filter_params.extend(params)
 
@@ -244,11 +244,15 @@ class PostgresChunkDB(ChunkDB):
         return condition, [self.format_query({}), *filter_params]
 
     @staticmethod
-    def _format_text_metadata_item(metadata_item: MetadataFilter) -> tuple[str, list[Any]]:
+    def _format_text_metadata_item(
+        metadata_item: MetadataFilter, table_column_names: set[str] | None = None
+    ) -> tuple[str, list[Any]]:
         field = metadata_item["field"]
         operator = metadata_item["operator"]
         value = metadata_item["value"]
-        field_expression = "metadata ->> %s"
+        is_table_column = table_column_names is not None and field in table_column_names
+        field_expression = field if is_table_column else "metadata ->> %s"
+        field_params = [] if is_table_column else [field]
 
         operator_map = {
             "equals": "=",
@@ -261,7 +265,7 @@ class PostgresChunkDB(ChunkDB):
         if operator in operator_map:
             return (
                 f"{field_expression} {operator_map[operator]} %s",
-                [field, str(value)],
+                [*field_params, value if is_table_column else str(value)],
             )
         if operator in ("in", "not_in"):
             values = value if isinstance(value, list) else [value]
@@ -271,7 +275,14 @@ class PostgresChunkDB(ChunkDB):
             placeholders = ", ".join(["%s"] * len(values))
             return (
                 f"{field_expression} {sql_operator} ({placeholders})",
-                [field, *[str(item) for item in values]],
+                [
+                    *field_params,
+                    *(
+                        values
+                        if is_table_column
+                        else [str(item) for item in values]
+                    ),
+                ],
             )
         raise ValueError(f"Unsupported metadata filter operator: {operator}")
 
@@ -353,7 +364,7 @@ class PostgresChunkDB(ChunkDB):
         self,
         query: str,
         top_k: int = 10,
-        metadata_filter: Optional[dict[str, Any] | MetadataFilter | MetadataFilters] = None,
+        metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
     ) -> list[ChunkSearchResult]:
         """Search chunk text, document titles, and section titles."""
         if not self.text_search_type:
@@ -371,9 +382,7 @@ class PostgresChunkDB(ChunkDB):
             if not self._ensure_text_search_index(cur):
                 return []
 
-            metadata_condition, metadata_params = self._format_text_metadata_filter(
-                metadata_filter
-            )
+            metadata_condition, metadata_params = self._format_text_metadata_filter(metadata_filter)
             if self.text_search_type == "bm25":
                 score_sql = (
                     "(search_vector <@> to_bm25query("
