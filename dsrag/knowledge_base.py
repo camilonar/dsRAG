@@ -48,7 +48,8 @@ class KnowledgeBase:
         file_system: Optional[FileSystem] = None,
         exists_ok: bool = True,
         save_metadata_to_disk: bool = True,
-        metadata_storage: Optional[MetadataStorage] = None
+        metadata_storage: Optional[MetadataStorage] = None,
+        additional_config: Optional[dict] = None
     ):
         """Initialize a KnowledgeBase instance.
 
@@ -75,6 +76,9 @@ class KnowledgeBase:
             save_metadata_to_disk (bool, optional): Whether to persist metadata. Defaults to True.
             metadata_storage (Optional[MetadataStorage], optional): Storage for KB metadata. 
                 Defaults to LocalMetadataStorage.
+            additional_config (Optional[dict], optional): Runtime configuration
+                overrides for stored components, keyed by component type such
+                as ``"vector_db"`` and ``"chunk_db"``.
 
         Raises:
             ValueError: If KB exists and exists_ok is False.
@@ -89,9 +93,7 @@ class KnowledgeBase:
         if save_metadata_to_disk:
             # load the KB if it exists; otherwise, initialize it and save it to disk
             if self.metadata_storage.kb_exists(self.kb_id) and exists_ok:
-                self._load(
-                    auto_context_model, reranker, file_system, chunk_db, vector_db
-                )
+                self._load(auto_context_model, reranker, file_system, chunk_db, vector_db, additional_config)
                 self._save()
             elif self.metadata_storage.kb_exists(self.kb_id) and not exists_ok:
                 raise ValueError(
@@ -177,7 +179,17 @@ class KnowledgeBase:
 
         self.metadata_storage.save(full_data, self.kb_id)
 
-    def _load(self, auto_context_model=None, reranker=None, file_system=None, chunk_db=None, vector_db=None):
+    @staticmethod
+    def _merge_component_config(
+        stored_config: Optional[dict], additional_config: Optional[dict]
+    ) -> dict:
+        """Merge runtime component settings over the stored configuration."""
+        merged_config = dict(stored_config or {})
+        merged_config.update(additional_config or {})
+        return merged_config
+
+    def _load(self, auto_context_model=None, reranker=None, file_system=None, chunk_db=None, vector_db=None,
+        additional_config: Optional[dict] = None):
         """Load a knowledge base configuration from disk.
 
         Internal method to deserialize components and metadata.
@@ -188,19 +200,18 @@ class KnowledgeBase:
             file_system (Optional[FileSystem], optional): Override stored file system.
             chunk_db (Optional[ChunkDB], optional): Override stored chunk database.
             vector_db (Optional[VectorDB], optional): Override stored vector database.
+            additional_config (Optional[dict], optional): Runtime configuration
+                overrides for stored component configurations.
 
         Note:
             Only auto_context_model and reranker can safely override stored components.
             Other component overrides may break functionality if not compatible.
         """
         data = self.metadata_storage.load(self.kb_id)
-        self.kb_metadata = {
-            key: value for key, value in data.items() if key != "components"
-        }
+        self.kb_metadata = {key: value for key, value in data.items() if key != "components"}
         components = data.get("components", {})
         # Deserialize components
-        self.embedding_model = Embedding.from_dict(
-            components.get("embedding_model", {}))
+        self.embedding_model = Embedding.from_dict(components.get("embedding_model", {}))
         
         self.reranker = (
             reranker
@@ -212,6 +223,16 @@ class KnowledgeBase:
             if auto_context_model
             else LLM.from_dict(components.get("auto_context_model", {}))
         )
+        additional_config = additional_config or {}
+        vector_db_config = self._merge_component_config(
+            components.get("vector_db", {}),
+            additional_config.get("vector_db", {}),
+        )
+        chunk_db_config = self._merge_component_config(
+            components.get("chunk_db", {}),
+            additional_config.get("chunk_db", {}),
+        )
+
         # Log warnings for overridden components
         base_extra = {"kb_id": self.kb_id}
         if vector_db is not None:
@@ -219,13 +240,13 @@ class KnowledgeBase:
         self.vector_db = (
             vector_db
             if vector_db
-            else VectorDB.from_dict(components.get("vector_db", {}))
+            else VectorDB.from_dict(vector_db_config)
         )
         if chunk_db is not None:
             logging.warning(f"Overriding stored chunk_db for KB '{self.kb_id}' during load.", extra=base_extra)
             self.chunk_db = chunk_db
         else:
-            self.chunk_db = ChunkDB.from_dict(components.get("chunk_db", {}))
+            self.chunk_db = ChunkDB.from_dict(chunk_db_config)
 
         file_system_dict = components.get("file_system", None)
 
