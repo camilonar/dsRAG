@@ -398,10 +398,7 @@ class PostgresVectorDB(VectorDB, DocLibrary):
         return {
             **super().to_dict(),
             "kb_id": self.kb_id,
-            "username": self.username,
-            "password": self.password,
             "database": self.database,
-            "host": self.host,
             "port": self.port,
             "embedding_type": self.embedding_type,
             "vector_dimension": self.vector_dimension,

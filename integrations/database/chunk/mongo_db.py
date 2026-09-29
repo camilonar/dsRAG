@@ -308,6 +308,5 @@ class MongoDB(ChunkDB):
             **super().to_dict(),
             "db_name": self.db_name,
             "kb_id": self.kb_id,
-            "uri": self.uri,
             "collection_name": self.collection_name,
         }

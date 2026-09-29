@@ -712,10 +712,7 @@ class PostgresChunkDB(ChunkDB):
         return {
             **super().to_dict(),
             "kb_id": self.kb_id,
-            "username": self.username,
-            "password": self.password,
             "database": self.database,
-            "host": self.host,
             "port": self.port,
             "table_name": self.table_name,
             "text_search_type": self.text_search_type,

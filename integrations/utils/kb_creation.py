@@ -51,7 +51,25 @@ def create_file_system():
     return file_system
 
 def __load_kb(kb_id: str, metadata_storage: MetadataStorage) -> KnowledgeBase:
-    kb = FlexKnowledgeBase(kb_id=kb_id, metadata_storage=metadata_storage)
+    additional_config = {}
+    if env.DB_ENGINE == "MONGO":
+        mongo_config = {"uri": env.MONGODB_URI}
+        additional_config = {
+            "vector_db": mongo_config,
+            "chunk_db": mongo_config,
+        }
+    elif env.DB_ENGINE == "POSTGRES":
+        postgres_credentials = {
+            "host": env.POSTGRES_HOST,
+            "username": env.POSTGRES_USERNAME,
+            "password": env.POSTGRES_PASSWORD,
+        }
+        additional_config = {
+            "vector_db": postgres_credentials,
+            "chunk_db": postgres_credentials,
+        }
+
+    kb = FlexKnowledgeBase(kb_id=kb_id, metadata_storage=metadata_storage, additional_config=additional_config)
     return kb
 
 def load_kb(kb_id: str) -> KnowledgeBase:

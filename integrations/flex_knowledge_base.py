@@ -30,7 +30,8 @@ class FlexKnowledgeBase(KnowledgeBase):
             exists_ok: bool = True,
             save_metadata_to_disk: bool = True,
             metadata_storage: Optional[MetadataStorage] = None,
-            mandatory_metadata: dict = {}
+            mandatory_metadata: dict = {},
+            additional_config: Optional[dict] = None,
     ):
         """Initialize a KnowledgeBase instance.
 
@@ -57,6 +58,8 @@ class FlexKnowledgeBase(KnowledgeBase):
             save_metadata_to_disk (bool, optional): Whether to persist metadata. Defaults to True.
             metadata_storage (Optional[MetadataStorage], optional): Storage for KB metadata.
                 Defaults to LocalMetadataStorage.
+            additional_config (Optional[dict], optional): Runtime configuration
+                overrides for stored components.
             mandatory_metadata (dict, optional): metadata that must always be included in insertions and
                 in searches. This can be used when multiple Knowledge Bases have access to the same collection/table
                 but only can query over a subset of data based on its metadata.
@@ -69,7 +72,7 @@ class FlexKnowledgeBase(KnowledgeBase):
         }
         super().__init__(kb_id, title, supp_id, description, language, storage_directory, embedding_model,
             reranker, auto_context_model, vector_db, chunk_db, file_system, exists_ok, save_metadata_to_disk,
-            metadata_storage)
+            metadata_storage, additional_config=additional_config)
         self.vector_db.mandatory_metadata = self.kb_metadata["mandatory_metadata"]
         self.chunk_db.mandatory_metadata = self.kb_metadata["mandatory_metadata"]
 
