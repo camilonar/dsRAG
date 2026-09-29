@@ -19,6 +19,10 @@ POSTGRES_DB_NAME = os.getenv("POSTGRES_DB_NAME")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", 5432)
 POSTGRES_USERNAME = os.getenv("POSTGRES_USERNAME")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+# PostgreSQL chunk full-text search configuration. Use ``bm25`` to enable the
+# lakebase_text extension, or ``tsvector`` for PostgreSQL's native FTS.
+POSTGRES_TEXT_SEARCH_TYPE = os.getenv("POSTGRES_TEXT_SEARCH_TYPE", "bm25")
+POSTGRES_TEXT_SEARCH_CONFIG = os.getenv("POSTGRES_TEXT_SEARCH_CONFIG", "spanish")
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "voyage-3.5-lite")
 EMBEDDING_MODEL_DIM = int(os.getenv("EMBEDDING_MODEL_DIM", 1024))

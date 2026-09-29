@@ -571,6 +571,170 @@ class KnowledgeBase:
             # Re-raise the exception
             raise
 
+    def add_document_text_only(
+        self,
+        doc_id: str,
+        text: str = "",
+        file_path: str = "",
+        document_title: str = "",
+        file_parsing_config: dict = {},
+        chunking_config: dict = {},
+        chunk_size: int = None,
+        min_length_for_chunking: int = None,
+        supp_id: str = "",
+        metadata: dict = {},
+    ) -> None:
+        """Add a document without LLM calls, embeddings, or vector storage.
+        The main use case of this function is to be used in conjunction with a
+        ChunkDB that supports full-text capabilities. This allows adding a document
+        to the KB when speed or cost are important variables to be accounted for.
+
+        Parsing uses the non-VLM file parser and deterministic chunking. The
+        resulting chunks are stored only in ``chunk_db`` and can therefore be
+        retrieved with text search.
+        """
+        ingestion_logger = logging.getLogger("dsrag.ingestion")
+        base_extra = {"kb_id": self.kb_id, "doc_id": doc_id}
+        if file_path:
+            base_extra["file_path"] = file_path
+        overall_start_time = time.perf_counter()
+
+        try:
+            if text == "" and file_path == "":
+                raise ValueError("Either text or file_path must be provided")
+            if "/" in doc_id:
+                raise ValueError("doc_id cannot contain '/' characters")
+            if self.chunk_db.doc_id_exists(doc_id):
+                ingestion_logger.warning(
+                    "Document already exists in knowledge base, skipping",
+                    extra=base_extra,
+                )
+                return
+
+            file_parsing_config = dict(file_parsing_config or {})
+            chunking_config = dict(chunking_config or {})
+            metadata = dict(metadata or {})
+            if file_parsing_config.get("use_vlm", False):
+                raise ValueError(
+                    "add_document_text_only does not support VLM parsing"
+                )
+            file_parsing_config["use_vlm"] = False
+            if chunk_size is not None:
+                chunking_config["chunk_size"] = chunk_size
+            if min_length_for_chunking is not None:
+                chunking_config["min_length_for_chunking"] = min_length_for_chunking
+
+            sections, chunks = parse_and_chunk(
+                kb_id=self.kb_id,
+                doc_id=doc_id,
+                file_path=file_path,
+                text=text,
+                file_parsing_config=file_parsing_config,
+                # Semantic sectioning is model-backed and must remain disabled.
+                semantic_sectioning_config={"use_semantic_sectioning": False},
+                chunking_config=chunking_config,
+                file_system=self.file_system,
+            )
+
+            title = document_title or doc_id
+            for chunk in chunks:
+                section_index = chunk.get("section_index")
+                section_title = ""
+                if section_index is not None and 0 <= section_index < len(sections):
+                    section_title = sections[section_index].get("title", "") or ""
+                chunk["document_title"] = title
+                chunk["document_summary"] = ""
+                chunk["section_title"] = section_title
+                chunk["section_summary"] = ""
+
+            add_chunks_to_db(chunk_db=self.chunk_db, chunks=chunks, chunks_to_embed=chunks, chunk_embeddings=chunks,
+                metadata=metadata, doc_id=doc_id, supp_id=supp_id)
+            self._save()
+            ingestion_logger.info(
+                "Text-only document ingestion successful",
+                extra={
+                    **base_extra,
+                    "total_duration_s": round(
+                        time.perf_counter() - overall_start_time, 4
+                    ),
+                    "num_sections": len(sections),
+                    "num_chunks": len(chunks),
+                },
+            )
+        except Exception as e:
+            ingestion_logger.error(
+                "Text-only document ingestion failed",
+                extra={
+                    **base_extra,
+                    "total_duration_s": round(
+                        time.perf_counter() - overall_start_time, 4
+                    ),
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+            raise
+
+    def add_documents_text_only(
+        self,
+        documents: List[Dict[str, Union[str, dict]]],
+        max_workers: int = 1,
+        show_progress: bool = True,
+        rate_limit_pause: float = 0.0,
+    ) -> List[str]:
+        """Add multiple documents using deterministic text-only ingestion."""
+        successful_uploads = []
+
+        def process_document(doc: Dict) -> Optional[str]:
+            try:
+                doc_params = doc.copy()
+                doc_id = doc_params["doc_id"]
+                self.add_document_text_only(
+                    doc_id=doc_id,
+                    text=doc_params.get("text", ""),
+                    file_path=doc_params.get("file_path", ""),
+                    document_title=doc_params.get("document_title", ""),
+                    file_parsing_config=dict(
+                        doc_params.get("file_parsing_config", {}) or {}
+                    ),
+                    chunking_config=dict(
+                        doc_params.get("chunking_config", {}) or {}
+                    ),
+                    chunk_size=doc_params.get("chunk_size"),
+                    min_length_for_chunking=doc_params.get(
+                        "min_length_for_chunking"
+                    ),
+                    supp_id=doc_params.get("supp_id", ""),
+                    metadata=dict(doc_params.get("metadata", {}) or {}),
+                )
+                if rate_limit_pause > 0:
+                    time.sleep(rate_limit_pause)
+                return doc_id
+            except Exception as e:
+                logging.getLogger("dsrag.ingestion").error(
+                    "Error processing text-only document",
+                    extra={"doc_id": doc.get("doc_id", "unknown"), "error": str(e)},
+                    exc_info=True,
+                )
+                return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_doc = {
+                executor.submit(process_document, doc): doc for doc in documents
+            }
+            futures = concurrent.futures.as_completed(future_to_doc)
+            if show_progress:
+                futures = tqdm(
+                    futures,
+                    total=len(documents),
+                    desc="Processing text-only documents",
+                )
+            for future in futures:
+                doc_id = future.result()
+                if doc_id:
+                    successful_uploads.append(doc_id)
+        return successful_uploads
+
     def add_documents(
         self,
         documents: List[Dict[str, Union[str, dict]]],
@@ -743,11 +907,46 @@ class KnowledgeBase:
         """
         return np.dot(v1, v2)
 
-    def _search(self, query: str, top_k: int, metadata_filter: Optional[MetadataFilter] = None) -> list:
+    def _search(
+        self,
+        query: str,
+        top_k: int,
+        metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
+        search_mode: str = "vector",
+    ) -> list:
         """Search the knowledge base for relevant chunks.
 
         Internal method for single query search.
         """
+        if search_mode == "text":
+            search_results = self.chunk_db.search(
+                query, top_k, metadata_filter
+            )
+            formatted_results = []
+            for result in search_results:
+                metadata = dict(result.get("metadata") or {})
+                document_title = result.get("document_title") or ""
+                section_title = result.get("section_title") or ""
+                metadata.update(
+                    {
+                        "doc_id": result["doc_id"],
+                        "chunk_index": result["chunk_index"],
+                        "chunk_text": result["chunk_text"],
+                        "chunk_header": f"{document_title} {section_title}".strip(),
+                    }
+                )
+                formatted_results.append(
+                    {
+                        "doc_id": result["doc_id"],
+                        "vector": None,
+                        "metadata": metadata,
+                        "similarity": result["score"],
+                    }
+                )
+            if len(formatted_results) == 0:
+                return []
+            return self.reranker.rerank_search_results(query, formatted_results)
+
         query_vector = self._get_embeddings([query], input_type="query")[0]
         search_results = self.vector_db.search(query_vector, top_k, metadata_filter)
         if len(search_results) == 0:
@@ -755,20 +954,34 @@ class KnowledgeBase:
         search_results = self.reranker.rerank_search_results(query, search_results)
         return search_results
 
-    def _get_all_ranked_results(self, search_queries: list[str], metadata_filter: Optional[MetadataFilter] = None):
+    def _get_all_ranked_results(
+        self,
+        search_queries: list[str],
+        metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
+        search_mode: str = "vector",
+    ):
         """Execute multiple search queries.
 
         Internal method for parallel query execution.
         """
+        if search_mode == "text":
+            return [
+                self._search(query, 200, metadata_filter, search_mode)
+                for query in search_queries
+            ]
+
         if self.vector_db.is_async():
             all_ranked_results = []
             for query in search_queries:
-                ranked_results = self._search(query, 20, metadata_filter)
+                ranked_results = self._search(
+                    query, 20, metadata_filter, search_mode
+                )
                 all_ranked_results.append(ranked_results)
             return all_ranked_results
         else:
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = [executor.submit(self._search, query, 200, metadata_filter) for query in search_queries]
+                futures = [executor.submit(self._search, query, 200, metadata_filter, search_mode)
+                           for query in search_queries]
                 all_ranked_results = []
                 for future in futures:
                     ranked_results = future.result()
@@ -835,6 +1048,7 @@ class KnowledgeBase:
         latency_profiling: bool = False,
         metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
         return_mode: str = "text",
+        search_mode: str = "vector",
     ) -> list[dict]:
         """Query the knowledge base to retrieve relevant segments.
 
@@ -877,6 +1091,10 @@ class KnowledgeBase:
                 - "page_images": Return list of page image paths
                 - "dynamic": Choose format based on content type
                 Defaults to "text".
+            search_mode (str, optional): Search strategy. ``"vector"`` uses
+                semantic vector search, ``"text"`` uses the chunk database's
+                full-text search, and ``"hybrid"`` is reserved for a future
+                implementation. Defaults to "vector".
 
         Returns:
             list[dict]: List of segment information dictionaries, ordered by relevance.
@@ -932,8 +1150,16 @@ class KnowledgeBase:
                 "rse_params": rse_params if isinstance(rse_params, dict) else {"preset": rse_params},
                 "metadata_filter": metadata_filter,
                 "return_mode": return_mode,
+                "search_mode": search_mode,
                 "reranker_model": self.reranker.__class__.__name__
             })
+
+            if search_mode == "hybrid":
+                raise NotImplementedError("Hybrid search is not implemented yet")
+            if search_mode not in ("vector", "text"):
+                raise ValueError(
+                    "search_mode must be one of 'vector', 'text', or 'hybrid'"
+                )
             
             # check if the rse_params is a preset name and convert it to a dictionary if it is
             if isinstance(rse_params, str) and rse_params in RSE_PARAMS_PRESETS:
@@ -972,7 +1198,11 @@ class KnowledgeBase:
 
             # --- Search/Rerank Step ---
             step_start_time = time.perf_counter()
-            all_ranked_results = self._get_all_ranked_results(search_queries=search_queries, metadata_filter=metadata_filter)
+            all_ranked_results = self._get_all_ranked_results(
+                search_queries=search_queries,
+                metadata_filter=metadata_filter,
+                search_mode=search_mode,
+            )
             step_duration = time.perf_counter() - step_start_time
             
             # Get the number of initial results per query
