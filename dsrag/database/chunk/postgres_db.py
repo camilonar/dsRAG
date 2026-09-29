@@ -3,11 +3,16 @@ import time
 from typing import Any, Optional
 
 from psycopg2._json import Json
+from psycopg2.extras import execute_values
 
 from dsrag.database.chunk.db import ChunkDB
 from dsrag.database.chunk.types import ChunkSearchResult, FormattedDocument
 from dsrag.database.vector.types import MetadataFilter, MetadataFilters
 from integrations.database.postgres import Postgres
+
+
+# Maximum number of chunk rows written by a single INSERT operation.
+MAX_CHUNKS_PER_INSERT = 100
 
 
 class PostgresChunkDB(ChunkDB):
@@ -295,35 +300,42 @@ class PostgresChunkDB(ChunkDB):
             # Create a created on timestamp
             created_on = str(int(time.time()))
 
-            # Get the data from the dictionary
-            for chunk_index, chunk in chunks.items():
-                chunk_text = chunk.get("chunk_text", "")
-                chunk_length = len(chunk_text)
+            columns = (
+                "doc_id, document_title, document_summary, section_title, "
+                "section_summary, chunk_text, chunk_page_start, chunk_page_end, "
+                "is_visual, chunk_index, chunk_length, created_on, supp_id, metadata"
+            )
+            sql = f"INSERT INTO {self.table_name} ({columns}) VALUES %s"
 
-                values_dict = {
-                    'doc_id': doc_id,
-                    'document_title': chunk.get("document_title", ""),
-                    'document_summary': chunk.get("document_summary", ""),
-                    'section_title': chunk.get("section_title", ""),
-                    'section_summary': chunk.get("section_summary", ""),
-                    'chunk_text': chunk.get("chunk_text", ""),
-                    'chunk_page_start': chunk.get("chunk_page_start", None),
-                    'chunk_page_end': chunk.get("chunk_page_end", None),
-                    'is_visual': chunk.get("is_visual", False),
-                    'chunk_index': chunk_index,
-                    'chunk_length': chunk_length,
-                    'created_on': created_on,
-                    'supp_id': supp_id,
-                    'metadata': Json(metadata)
-                }
+            chunk_items = list(chunks.items())
+            for batch_start in range(0, len(chunk_items), MAX_CHUNKS_PER_INSERT):
+                chunk_batch = chunk_items[
+                    batch_start : batch_start + MAX_CHUNKS_PER_INSERT
+                ]
+                batch_values = []
 
-                # Generate the column names and placeholders
-                columns = ', '.join(values_dict.keys())
-                placeholders = ', '.join(['%s'] * len(values_dict))
+                for chunk_index, chunk in chunk_batch:
+                    chunk_text = chunk.get("chunk_text", "")
+                    batch_values.append(
+                        (
+                            doc_id,
+                            chunk.get("document_title", ""),
+                            chunk.get("document_summary", ""),
+                            chunk.get("section_title", ""),
+                            chunk.get("section_summary", ""),
+                            chunk_text,
+                            chunk.get("chunk_page_start", None),
+                            chunk.get("chunk_page_end", None),
+                            chunk.get("is_visual", False),
+                            chunk_index,
+                            len(chunk_text),
+                            created_on,
+                            supp_id,
+                            Json(metadata),
+                        )
+                    )
 
-                sql = f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders})"
-                cur.execute(sql, tuple(values_dict.values()))
-
+                execute_values(cur, sql, batch_values)
                 conn.commit()
 
     def remove_document(self, doc_id: str) -> None:
