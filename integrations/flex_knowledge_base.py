@@ -135,7 +135,7 @@ class FlexKnowledgeBase(KnowledgeBase):
     ) -> list:
         filters = self._get_metadata_filters(metadata_filter)
         if search_mode == "text":
-            return super()._search(self, query, top_k, filters, search_mode="text")
+            return KnowledgeBase._search(self, query, top_k, filters, search_mode="text")
         if search_mode == "hybrid":
             raise NotImplementedError("Hybrid search is not implemented yet")
         if search_mode != "vector":

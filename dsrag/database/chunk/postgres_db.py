@@ -38,7 +38,7 @@ class PostgresChunkDB(ChunkDB):
 
     def __init__(self, kb_id: str, username: str, password: str, database: str, host: str="localhost", port: int = 5432,
                  table_name: str = "", mandatory_metadata: dict = None, ssl_mode: str = "require",
-                 text_search_type: Optional[str] = "tsvector", text_search_config: str = "english") -> None:
+                 text_search_type: Optional[str] = None, text_search_config: str = "english") -> None:
         self.kb_id = kb_id
         self.username = username
         self.password = password
