@@ -7,6 +7,7 @@ from dsrag.database.vector.types import MetadataFilter, MetadataFilters
 from dsrag.database.chunk import ChunkDB
 from dsrag.embedding import Embedding
 from dsrag.reranker import Reranker
+from dsrag.hybrid_search import HybridSearch
 from dsrag.llm import LLM
 from dsrag.dsparse.file_parsing.file_system import FileSystem
 from dsrag.metadata import MetadataStorage
@@ -32,6 +33,7 @@ class FlexKnowledgeBase(KnowledgeBase):
             metadata_storage: Optional[MetadataStorage] = None,
             mandatory_metadata: dict = {},
             additional_config: Optional[dict] = None,
+            hybrid_search: Optional[HybridSearch] = None,
     ):
         """Initialize a KnowledgeBase instance.
 
@@ -60,6 +62,8 @@ class FlexKnowledgeBase(KnowledgeBase):
                 Defaults to LocalMetadataStorage.
             additional_config (Optional[dict], optional): Runtime configuration
                 overrides for stored components.
+            hybrid_search (Optional[HybridSearch], optional): Component for
+                combining text and vector search results.
             mandatory_metadata (dict, optional): metadata that must always be included in insertions and
                 in searches. This can be used when multiple Knowledge Bases have access to the same collection/table
                 but only can query over a subset of data based on its metadata.
@@ -72,7 +76,7 @@ class FlexKnowledgeBase(KnowledgeBase):
         }
         super().__init__(kb_id, title, supp_id, description, language, storage_directory, embedding_model,
             reranker, auto_context_model, vector_db, chunk_db, file_system, exists_ok, save_metadata_to_disk,
-            metadata_storage, additional_config=additional_config)
+            metadata_storage, additional_config=additional_config, hybrid_search=hybrid_search)
         self.vector_db.mandatory_metadata = self.kb_metadata["mandatory_metadata"]
         self.chunk_db.mandatory_metadata = self.kb_metadata["mandatory_metadata"]
 
@@ -135,24 +139,11 @@ class FlexKnowledgeBase(KnowledgeBase):
             top_k: int,
             metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
             search_mode: str = "vector",
+            apply_reranker: bool = True
     ) -> list:
         filters = self._get_metadata_filters(metadata_filter)
-        if search_mode == "text":
-            return KnowledgeBase._search(self, query, top_k, filters, search_mode="text")
-        if search_mode == "hybrid":
-            raise NotImplementedError("Hybrid search is not implemented yet")
-        if search_mode != "vector":
-            raise ValueError(
-                "search_mode must be one of 'vector', 'text', or 'hybrid'"
-            )
-
-        query_vector = self._get_embeddings([query], input_type="query")[0]
-
-        search_results = self.vector_db.search(query_vector, top_k, filters)
-        if len(search_results) == 0:
-            return []
-        search_results = self.reranker.rerank_search_results(query, search_results)
-        return search_results
+        return KnowledgeBase._search(self, query, top_k, filters, search_mode=search_mode, 
+                                     apply_reranker=apply_reranker)
 
     def _get_metadata_filters(
             self,

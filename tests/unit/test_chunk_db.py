@@ -518,6 +518,45 @@ class TestDynamoDB(unittest.TestCase):
         assert db2.kb_id == db.kb_id, "Failed to load kb_id from dict."
         self.assertEqual(db2.kb_id, db.kb_id)
 
+class TestPostgresChunkDBMetadataFilter(unittest.TestCase):
+    def setUp(self):
+        self.db = object.__new__(PostgresChunkDB)
+        self.db.columns = [
+            {"name": "doc_id"},
+            {"name": "chunk_index"},
+            {"name": "metadata"},
+        ]
+        self.db.mandatory_metadata = {}
+
+    def test__column_filter_uses_table_column(self):
+        condition, params = self.db._format_text_metadata_filter(
+            {"field": "doc_id", "operator": "equals", "value": "doc-1"}
+        )
+
+        self.assertEqual(
+            condition, "metadata @> %s::jsonb AND (doc_id = %s)"
+        )
+        self.assertEqual(params, ["{}", "doc-1"])
+
+    def test__mixed_filter_uses_table_column_and_metadata(self):
+        condition, params = self.db._format_text_metadata_filter(
+            {
+                "filters": [
+                    {"field": "chunk_index", "operator": "in", "value": [1, 2]},
+                    {"field": "source", "operator": "equals", "value": "api"},
+                ],
+                "operator": "and",
+            }
+        )
+
+        self.assertEqual(
+            condition,
+            "metadata @> %s::jsonb AND "
+            "(chunk_index IN (%s, %s) AND metadata ->> %s = %s)",
+        )
+        self.assertEqual(params, ["{}", 1, 2, "source", "api"])
+
+
 @pytest.mark.skipif(reason="Postgres is not available on GitHub Actions")
 class TestPostgresChunkDB(unittest.TestCase):
     

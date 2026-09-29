@@ -4,6 +4,7 @@ from dsrag.embedding import VoyageAIEmbedding
 from dsrag.knowledge_base import KnowledgeBase
 from dsrag.llm import OpenAIChatAPI
 from dsrag.metadata import MetadataStorage
+from dsrag.hybrid_search import RelativeScoreFusion
 from dsrag.reranker import VoyageReranker
 from integrations.database.chunk.mongo_db import MongoDB
 from integrations.database.vector.mongo_atlas_db import MongoAtlasDB
@@ -38,12 +39,14 @@ def __create_kb(kb_id: str, metadata_storage: MetadataStorage, mandatory_metadat
     embedding = VoyageAIEmbedding(model=env.EMBEDDING_MODEL, dimension=env.EMBEDDING_MODEL_DIM,
                                   output_dtype=env.EMBEDDING_MODEL_TYPE)
     reranker = VoyageReranker(model=env.RERANKER_MODEL)
+    hybrid_search = RelativeScoreFusion(alpha=env.HYBRID_SEARCH_ALPHA)
     llm = OpenAIChatAPI(model=env.LLM_MODEL)
     file_system = create_file_system()
 
     kb = FlexKnowledgeBase(kb_id=kb_id, vector_db=vector_db, chunk_db=chunk_db, embedding_model=embedding,
                        reranker=reranker, file_system=file_system, metadata_storage=metadata_storage,
-                       auto_context_model=llm, language=env.KB_LANGUAGE, mandatory_metadata=mandatory_metadata)
+                       auto_context_model=llm, language=env.KB_LANGUAGE, mandatory_metadata=mandatory_metadata,
+                       hybrid_search=hybrid_search)
     return kb
 
 def create_file_system():
