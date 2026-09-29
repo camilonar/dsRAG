@@ -343,7 +343,7 @@ class PostgresVectorDB(VectorDB, DocLibrary):
             results = cur.fetchall()
             formatted_results: list[VectorSearchResult] = []
             for row in results:
-                metadata, embedding, cosine_distance = row
+                metadata, cosine_distance = row
 
                 formatted_results.append(
                     VectorSearchResult(

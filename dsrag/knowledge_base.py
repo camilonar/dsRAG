@@ -26,6 +26,7 @@ from dsrag.database.vector.types import MetadataFilter, MetadataFilters
 from dsrag.database.chunk import ChunkDB, BasicChunkDB
 from dsrag.embedding import Embedding, OpenAIEmbedding
 from dsrag.reranker import Reranker, CohereReranker
+from dsrag.hybrid_search import HybridSearch, RelativeScoreFusion
 from dsrag.llm import LLM, OpenAIChatAPI
 from dsrag.dsparse.file_parsing.file_system import FileSystem, LocalFileSystem
 from dsrag.metadata import MetadataStorage, LocalMetadataStorage
@@ -49,7 +50,8 @@ class KnowledgeBase:
         exists_ok: bool = True,
         save_metadata_to_disk: bool = True,
         metadata_storage: Optional[MetadataStorage] = None,
-        additional_config: Optional[dict] = None
+        additional_config: Optional[dict] = None,
+        hybrid_search: Optional[HybridSearch] = None,
     ):
         """Initialize a KnowledgeBase instance.
 
@@ -79,6 +81,9 @@ class KnowledgeBase:
             additional_config (Optional[dict], optional): Runtime configuration
                 overrides for stored components, keyed by component type such
                 as ``"vector_db"`` and ``"chunk_db"``.
+            hybrid_search (Optional[HybridSearch], optional): Component for
+                combining text and vector search results. Defaults to
+                RelativeScoreFusion.
 
         Raises:
             ValueError: If KB exists and exists_ok is False.
@@ -93,7 +98,15 @@ class KnowledgeBase:
         if save_metadata_to_disk:
             # load the KB if it exists; otherwise, initialize it and save it to disk
             if self.metadata_storage.kb_exists(self.kb_id) and exists_ok:
-                self._load(auto_context_model, reranker, file_system, chunk_db, vector_db, additional_config)
+                self._load(
+                    auto_context_model=auto_context_model,
+                    reranker=reranker,
+                    file_system=file_system,
+                    chunk_db=chunk_db,
+                    vector_db=vector_db,
+                    additional_config=additional_config,
+                    hybrid_search=hybrid_search,
+                )
                 self._save()
             elif self.metadata_storage.kb_exists(self.kb_id) and not exists_ok:
                 raise ValueError(
@@ -109,7 +122,13 @@ class KnowledgeBase:
                     "created_on": created_time,
                 }
                 self._initialize_components(
-                    embedding_model, reranker, auto_context_model, vector_db, chunk_db, file_system
+                    embedding_model,
+                    reranker,
+                    auto_context_model,
+                    vector_db,
+                    chunk_db,
+                    file_system,
+                    hybrid_search,
                 )
                 self._save()  # save the config for the KB to disk
         else:
@@ -120,7 +139,13 @@ class KnowledgeBase:
                 "supp_id": supp_id,
             }
             self._initialize_components(
-                embedding_model, reranker, auto_context_model, vector_db, chunk_db, file_system
+                embedding_model,
+                reranker,
+                auto_context_model,
+                vector_db,
+                chunk_db,
+                file_system,
+                hybrid_search,
             )
 
     def _get_metadata_path(self):
@@ -139,6 +164,7 @@ class KnowledgeBase:
         vector_db: Optional[VectorDB],
         chunk_db: Optional[ChunkDB],
         file_system: Optional[FileSystem],
+        hybrid_search: Optional[HybridSearch] = None,
     ):
         """Initialize the knowledge base components.
 
@@ -146,9 +172,8 @@ class KnowledgeBase:
         """
         self.embedding_model = embedding_model if embedding_model else OpenAIEmbedding()
         self.reranker = reranker if reranker else CohereReranker()
-        self.auto_context_model = (
-            auto_context_model if auto_context_model else OpenAIChatAPI()
-        )
+        self.hybrid_search = hybrid_search if hybrid_search is not None else RelativeScoreFusion()
+        self.auto_context_model = auto_context_model if auto_context_model else OpenAIChatAPI()
         self.vector_db = (
             vector_db
             if vector_db
@@ -169,6 +194,7 @@ class KnowledgeBase:
         components = {
             "embedding_model": self.embedding_model.to_dict(),
             "reranker": self.reranker.to_dict(),
+            "hybrid_search": self.hybrid_search.to_dict(),
             "auto_context_model": self.auto_context_model.to_dict(),
             "vector_db": self.vector_db.to_dict(),
             "chunk_db": self.chunk_db.to_dict(),
@@ -189,7 +215,7 @@ class KnowledgeBase:
         return merged_config
 
     def _load(self, auto_context_model=None, reranker=None, file_system=None, chunk_db=None, vector_db=None,
-        additional_config: Optional[dict] = None):
+        additional_config: Optional[dict] = None, hybrid_search=None):
         """Load a knowledge base configuration from disk.
 
         Internal method to deserialize components and metadata.
@@ -200,6 +226,8 @@ class KnowledgeBase:
             file_system (Optional[FileSystem], optional): Override stored file system.
             chunk_db (Optional[ChunkDB], optional): Override stored chunk database.
             vector_db (Optional[VectorDB], optional): Override stored vector database.
+            hybrid_search (Optional[HybridSearch], optional): Override stored
+                hybrid-search component.
             additional_config (Optional[dict], optional): Runtime configuration
                 overrides for stored component configurations.
 
@@ -217,6 +245,14 @@ class KnowledgeBase:
             reranker
             if reranker
             else Reranker.from_dict(components.get("reranker", {}))
+        )
+        hybrid_search_config = components.get("hybrid_search")
+        self.hybrid_search = (
+            hybrid_search
+            if hybrid_search is not None
+            else HybridSearch.from_dict(hybrid_search_config)
+            if hybrid_search_config
+            else RelativeScoreFusion()
         )
         self.auto_context_model = (
             auto_context_model
@@ -934,17 +970,20 @@ class KnowledgeBase:
         top_k: int,
         metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
         search_mode: str = "vector",
+        apply_reranker: bool = True,
     ) -> list:
         """Search the knowledge base for relevant chunks.
 
         Internal method for single query search.
         """
-        if search_mode == "text":
-            search_results = self.chunk_db.search(
-                query, top_k, metadata_filter
-            )
-            formatted_results = []
-            for result in search_results:
+        if search_mode == "hybrid":
+            text_results = self._search(query, top_k, metadata_filter, "text", apply_reranker=False)
+            vector_results = self._search(query, top_k, metadata_filter, "vector", apply_reranker=False)
+            search_results = self.hybrid_search.hybrid_search(text_results, vector_results)
+        elif search_mode == "text":
+            partial_results = self.chunk_db.search(query, top_k, metadata_filter)
+            search_results = []
+            for result in partial_results:
                 metadata = dict(result.get("metadata") or {})
                 document_title = result.get("document_title") or ""
                 section_title = result.get("section_title") or ""
@@ -956,7 +995,7 @@ class KnowledgeBase:
                         "chunk_header": f"{document_title} {section_title}".strip(),
                     }
                 )
-                formatted_results.append(
+                search_results.append(
                     {
                         "doc_id": result["doc_id"],
                         "vector": None,
@@ -964,15 +1003,16 @@ class KnowledgeBase:
                         "similarity": result["score"],
                     }
                 )
-            if len(formatted_results) == 0:
-                return []
-            return self.reranker.rerank_search_results(query, formatted_results)
+        elif search_mode == "vector":
+            query_vector = self._get_embeddings([query], input_type="query")[0]
+            search_results = self.vector_db.search(query_vector, top_k, metadata_filter)
+        else:
+            raise ValueError("search_mode must be one of 'vector', 'text', or 'hybrid'")
 
-        query_vector = self._get_embeddings([query], input_type="query")[0]
-        search_results = self.vector_db.search(query_vector, top_k, metadata_filter)
         if len(search_results) == 0:
             return []
-        search_results = self.reranker.rerank_search_results(query, search_results)
+        if apply_reranker:
+            return self.reranker.rerank_search_results(query, search_results)
         return search_results
 
     def _get_all_ranked_results(
@@ -994,14 +1034,12 @@ class KnowledgeBase:
         if self.vector_db.is_async():
             all_ranked_results = []
             for query in search_queries:
-                ranked_results = self._search(
-                    query, 20, metadata_filter, search_mode
-                )
+                ranked_results = self._search(query, 40, metadata_filter, search_mode)
                 all_ranked_results.append(ranked_results)
             return all_ranked_results
         else:
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = [executor.submit(self._search, query, 200, metadata_filter, search_mode)
+                futures = [executor.submit(self._search, query, 40, metadata_filter, search_mode, True)
                            for query in search_queries]
                 all_ranked_results = []
                 for future in futures:
@@ -1114,8 +1152,8 @@ class KnowledgeBase:
                 Defaults to "text".
             search_mode (str, optional): Search strategy. ``"vector"`` uses
                 semantic vector search, ``"text"`` uses the chunk database's
-                full-text search, and ``"hybrid"`` is reserved for a future
-                implementation. Defaults to "vector".
+                full-text search, and ``"hybrid"`` combines both search
+                strategies. Defaults to "vector".
 
         Returns:
             list[dict]: List of segment information dictionaries, ordered by relevance.
@@ -1175,9 +1213,7 @@ class KnowledgeBase:
                 "reranker_model": self.reranker.__class__.__name__
             })
 
-            if search_mode == "hybrid":
-                raise NotImplementedError("Hybrid search is not implemented yet")
-            if search_mode not in ("vector", "text"):
+            if search_mode not in ("vector", "text", "hybrid"):
                 raise ValueError(
                     "search_mode must be one of 'vector', 'text', or 'hybrid'"
                 )

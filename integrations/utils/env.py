@@ -28,6 +28,7 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "voyage-3.5-lite")
 EMBEDDING_MODEL_DIM = int(os.getenv("EMBEDDING_MODEL_DIM", 1024))
 EMBEDDING_MODEL_TYPE = os.getenv("EMBEDDING_MODEL_TYPE", "int8")
 RERANKER_MODEL = os.getenv("RERANKER_MODEL", "rerank-2.5-lite")
+HYBRID_SEARCH_ALPHA = float(os.getenv("HYBRID_SEARCH_ALPHA", 0.5))
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-nano")
 
 KB_LANGUAGE = os.getenv("KB_LANGUAGE", "es")
