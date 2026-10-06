@@ -198,7 +198,6 @@ class MongoAtlasDB(VectorDB):
             "dimension": self.dimension,
             "index_name": self.index_name,
             "metric": self.metric,
-            "uri": self.uri,
             "collection_name": self.collection_name,
         }
 

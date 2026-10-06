@@ -4,6 +4,7 @@ from dsrag.embedding import VoyageAIEmbedding
 from dsrag.knowledge_base import KnowledgeBase
 from dsrag.llm import OpenAIChatAPI
 from dsrag.metadata import MetadataStorage
+from dsrag.hybrid_search import RelativeScoreFusion
 from dsrag.reranker import VoyageReranker
 from integrations.database.chunk.mongo_db import MongoDB
 from integrations.database.vector.mongo_atlas_db import MongoAtlasDB
@@ -16,7 +17,9 @@ main_ms = MongoDBMetadataStorage(db_name=env.DB_NAME, uri=env.MONGODB_URI, colle
 
 def __create_kb(kb_id: str, metadata_storage: MetadataStorage, mandatory_metadata: dict) -> KnowledgeBase:
     base_name = env.KB_NAME if not kb_id or kb_id == env.KB_NAME else f"{env.KB_NAME}_local"
-
+    # Currently, only configure full-text search for local KBs
+    text_search_type = None if not kb_id or kb_id == env.KB_NAME else env.POSTGRES_TEXT_SEARCH_TYPE
+    
     if env.DB_ENGINE == "MONGO":
         vector_db = MongoAtlasDB(db_name=env.DB_NAME, kb_id=kb_id, uri=env.MONGODB_URI, dimension=env.EMBEDDING_MODEL_DIM,
                              collection_name=f"{base_name}_vector")
@@ -27,19 +30,23 @@ def __create_kb(kb_id: str, metadata_storage: MetadataStorage, mandatory_metadat
                                      vector_dimension=env.EMBEDDING_MODEL_DIM, table_name=f"{base_name}_vector")
         chunk_db = PostgresChunkDB(kb_id=kb_id, username=env.POSTGRES_USERNAME, password=env.POSTGRES_PASSWORD,
                                    database=env.POSTGRES_DB_NAME, host=env.POSTGRES_HOST, port=env.POSTGRES_PORT,
-                                   table_name=f"{base_name}_chunks")
+                                   table_name=f"{base_name}_chunks",
+                                   text_search_type=text_search_type,
+                                   text_search_config=env.POSTGRES_TEXT_SEARCH_CONFIG)
     else:
         raise ValueError(f"Unsupported DB Engine {env.DB_ENGINE}")
 
     embedding = VoyageAIEmbedding(model=env.EMBEDDING_MODEL, dimension=env.EMBEDDING_MODEL_DIM,
                                   output_dtype=env.EMBEDDING_MODEL_TYPE)
     reranker = VoyageReranker(model=env.RERANKER_MODEL)
+    hybrid_search = RelativeScoreFusion(alpha=env.HYBRID_SEARCH_ALPHA)
     llm = OpenAIChatAPI(model=env.LLM_MODEL)
     file_system = create_file_system()
 
     kb = FlexKnowledgeBase(kb_id=kb_id, vector_db=vector_db, chunk_db=chunk_db, embedding_model=embedding,
                        reranker=reranker, file_system=file_system, metadata_storage=metadata_storage,
-                       auto_context_model=llm, language=env.KB_LANGUAGE, mandatory_metadata=mandatory_metadata)
+                       auto_context_model=llm, language=env.KB_LANGUAGE, mandatory_metadata=mandatory_metadata,
+                       hybrid_search=hybrid_search)
     return kb
 
 def create_file_system():
@@ -47,7 +54,25 @@ def create_file_system():
     return file_system
 
 def __load_kb(kb_id: str, metadata_storage: MetadataStorage) -> KnowledgeBase:
-    kb = FlexKnowledgeBase(kb_id=kb_id, metadata_storage=metadata_storage)
+    additional_config = {}
+    if env.DB_ENGINE == "MONGO":
+        mongo_config = {"uri": env.MONGODB_URI}
+        additional_config = {
+            "vector_db": mongo_config,
+            "chunk_db": mongo_config,
+        }
+    elif env.DB_ENGINE == "POSTGRES":
+        postgres_credentials = {
+            "host": env.POSTGRES_HOST,
+            "username": env.POSTGRES_USERNAME,
+            "password": env.POSTGRES_PASSWORD,
+        }
+        additional_config = {
+            "vector_db": postgres_credentials,
+            "chunk_db": postgres_credentials,
+        }
+
+    kb = FlexKnowledgeBase(kb_id=kb_id, metadata_storage=metadata_storage, additional_config=additional_config)
     return kb
 
 def load_kb(kb_id: str) -> KnowledgeBase:

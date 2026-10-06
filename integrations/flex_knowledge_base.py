@@ -7,6 +7,7 @@ from dsrag.database.vector.types import MetadataFilter, MetadataFilters
 from dsrag.database.chunk import ChunkDB
 from dsrag.embedding import Embedding
 from dsrag.reranker import Reranker
+from dsrag.hybrid_search import HybridSearch
 from dsrag.llm import LLM
 from dsrag.dsparse.file_parsing.file_system import FileSystem
 from dsrag.metadata import MetadataStorage
@@ -30,7 +31,9 @@ class FlexKnowledgeBase(KnowledgeBase):
             exists_ok: bool = True,
             save_metadata_to_disk: bool = True,
             metadata_storage: Optional[MetadataStorage] = None,
-            mandatory_metadata: dict = {}
+            mandatory_metadata: dict = {},
+            additional_config: Optional[dict] = None,
+            hybrid_search: Optional[HybridSearch] = None,
     ):
         """Initialize a KnowledgeBase instance.
 
@@ -57,6 +60,10 @@ class FlexKnowledgeBase(KnowledgeBase):
             save_metadata_to_disk (bool, optional): Whether to persist metadata. Defaults to True.
             metadata_storage (Optional[MetadataStorage], optional): Storage for KB metadata.
                 Defaults to LocalMetadataStorage.
+            additional_config (Optional[dict], optional): Runtime configuration
+                overrides for stored components.
+            hybrid_search (Optional[HybridSearch], optional): Component for
+                combining text and vector search results.
             mandatory_metadata (dict, optional): metadata that must always be included in insertions and
                 in searches. This can be used when multiple Knowledge Bases have access to the same collection/table
                 but only can query over a subset of data based on its metadata.
@@ -69,7 +76,7 @@ class FlexKnowledgeBase(KnowledgeBase):
         }
         super().__init__(kb_id, title, supp_id, description, language, storage_directory, embedding_model,
             reranker, auto_context_model, vector_db, chunk_db, file_system, exists_ok, save_metadata_to_disk,
-            metadata_storage)
+            metadata_storage, additional_config=additional_config, hybrid_search=hybrid_search)
         self.vector_db.mandatory_metadata = self.kb_metadata["mandatory_metadata"]
         self.chunk_db.mandatory_metadata = self.kb_metadata["mandatory_metadata"]
 
@@ -95,26 +102,67 @@ class FlexKnowledgeBase(KnowledgeBase):
             semantic_sectioning_config, chunking_config, chunk_size, min_length_for_chunking, supp_id,
             metadata)
 
-    def _search(self, query: str, top_k: int,
-                metadata_filter: Optional[MetadataFilter | MetadataFilters] = None) -> list:
-        query_vector = self._get_embeddings([query], input_type="query")[0]
+    def add_document_text_only(
+            self,
+            doc_id: str,
+            text: str = "",
+            file_path: str = "",
+            document_title: str = "",
+            file_parsing_config: dict = {},
+            chunking_config: dict = {},
+            chunk_size: int = None,
+            min_length_for_chunking: int = None,
+            supp_id: str = "",
+            metadata: dict = {},
+    ):
+        """Add a document without LLM calls, embeddings, or vector storage."""
+        metadata = {
+            **(metadata or {}),
+            **self.kb_metadata["mandatory_metadata"],
+        }
+        return super().add_document_text_only(
+            doc_id=doc_id,
+            text=text,
+            file_path=file_path,
+            document_title=document_title,
+            file_parsing_config=file_parsing_config,
+            chunking_config=chunking_config,
+            chunk_size=chunk_size,
+            min_length_for_chunking=min_length_for_chunking,
+            supp_id=supp_id,
+            metadata=metadata,
+        )
 
+    def _search(
+            self,
+            query: str,
+            top_k: int,
+            metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
+            search_mode: str = "vector",
+            apply_reranker: bool = True
+    ) -> list:
+        filters = self._get_metadata_filters(metadata_filter)
+        return KnowledgeBase._search(self, query, top_k, filters, search_mode=search_mode, 
+                                     apply_reranker=apply_reranker)
+
+    def _get_metadata_filters(
+            self,
+            metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
+    ) -> MetadataFilters:
+        """Format mandatory and user filters for either search backend."""
         filters = MetadataFilters(filters=[], operator="and")
 
-        m_metadata = self.kb_metadata["mandatory_metadata"]
-        for k, v in m_metadata.items():
-            filters["filters"].append(MetadataFilter(field=k, operator="equals", value=v))
+        for field, value in self.kb_metadata["mandatory_metadata"].items():
+            filters["filters"].append(
+                MetadataFilter(field=field, operator="equals", value=value)
+            )
 
         if metadata_filter:
             if "filters" in metadata_filter:
                 filters["filters"].extend(metadata_filter["filters"])
             else:
                 filters["filters"].append(metadata_filter)
-        search_results = self.vector_db.search(query_vector, top_k, filters)
-        if len(search_results) == 0:
-            return []
-        search_results = self.reranker.rerank_search_results(query, search_results)
-        return search_results
+        return filters
 
     def _get_segments_content(self, relevant_segment_info: list[dict], return_mode: str):
         return_modes = []

@@ -1,5 +1,5 @@
 from .db import ChunkDB
-from .types import FormattedDocument
+from .types import ChunkSearchResult, FormattedDocument
 
 # Always import the basic DB as it has no dependencies
 from .basic_db import BasicChunkDB
@@ -8,7 +8,8 @@ from .basic_db import BasicChunkDB
 __all__ = [
     "ChunkDB", 
     "BasicChunkDB", 
-    "FormattedDocument"
+    "FormattedDocument",
+    "ChunkSearchResult"
 ]
 
 # Lazy load database modules to avoid importing all dependencies at once

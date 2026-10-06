@@ -26,6 +26,7 @@ from dsrag.database.vector.types import MetadataFilter, MetadataFilters
 from dsrag.database.chunk import ChunkDB, BasicChunkDB
 from dsrag.embedding import Embedding, OpenAIEmbedding
 from dsrag.reranker import Reranker, CohereReranker
+from dsrag.hybrid_search import HybridSearch, RelativeScoreFusion
 from dsrag.llm import LLM, OpenAIChatAPI
 from dsrag.dsparse.file_parsing.file_system import FileSystem, LocalFileSystem
 from dsrag.metadata import MetadataStorage, LocalMetadataStorage
@@ -48,7 +49,9 @@ class KnowledgeBase:
         file_system: Optional[FileSystem] = None,
         exists_ok: bool = True,
         save_metadata_to_disk: bool = True,
-        metadata_storage: Optional[MetadataStorage] = None
+        metadata_storage: Optional[MetadataStorage] = None,
+        additional_config: Optional[dict] = None,
+        hybrid_search: Optional[HybridSearch] = None,
     ):
         """Initialize a KnowledgeBase instance.
 
@@ -75,6 +78,12 @@ class KnowledgeBase:
             save_metadata_to_disk (bool, optional): Whether to persist metadata. Defaults to True.
             metadata_storage (Optional[MetadataStorage], optional): Storage for KB metadata. 
                 Defaults to LocalMetadataStorage.
+            additional_config (Optional[dict], optional): Runtime configuration
+                overrides for stored components, keyed by component type such
+                as ``"vector_db"`` and ``"chunk_db"``.
+            hybrid_search (Optional[HybridSearch], optional): Component for
+                combining text and vector search results. Defaults to
+                RelativeScoreFusion.
 
         Raises:
             ValueError: If KB exists and exists_ok is False.
@@ -90,7 +99,13 @@ class KnowledgeBase:
             # load the KB if it exists; otherwise, initialize it and save it to disk
             if self.metadata_storage.kb_exists(self.kb_id) and exists_ok:
                 self._load(
-                    auto_context_model, reranker, file_system, chunk_db, vector_db
+                    auto_context_model=auto_context_model,
+                    reranker=reranker,
+                    file_system=file_system,
+                    chunk_db=chunk_db,
+                    vector_db=vector_db,
+                    additional_config=additional_config,
+                    hybrid_search=hybrid_search,
                 )
                 self._save()
             elif self.metadata_storage.kb_exists(self.kb_id) and not exists_ok:
@@ -107,7 +122,13 @@ class KnowledgeBase:
                     "created_on": created_time,
                 }
                 self._initialize_components(
-                    embedding_model, reranker, auto_context_model, vector_db, chunk_db, file_system
+                    embedding_model,
+                    reranker,
+                    auto_context_model,
+                    vector_db,
+                    chunk_db,
+                    file_system,
+                    hybrid_search,
                 )
                 self._save()  # save the config for the KB to disk
         else:
@@ -118,7 +139,13 @@ class KnowledgeBase:
                 "supp_id": supp_id,
             }
             self._initialize_components(
-                embedding_model, reranker, auto_context_model, vector_db, chunk_db, file_system
+                embedding_model,
+                reranker,
+                auto_context_model,
+                vector_db,
+                chunk_db,
+                file_system,
+                hybrid_search,
             )
 
     def _get_metadata_path(self):
@@ -137,6 +164,7 @@ class KnowledgeBase:
         vector_db: Optional[VectorDB],
         chunk_db: Optional[ChunkDB],
         file_system: Optional[FileSystem],
+        hybrid_search: Optional[HybridSearch] = None,
     ):
         """Initialize the knowledge base components.
 
@@ -144,9 +172,8 @@ class KnowledgeBase:
         """
         self.embedding_model = embedding_model if embedding_model else OpenAIEmbedding()
         self.reranker = reranker if reranker else CohereReranker()
-        self.auto_context_model = (
-            auto_context_model if auto_context_model else OpenAIChatAPI()
-        )
+        self.hybrid_search = hybrid_search if hybrid_search is not None else RelativeScoreFusion()
+        self.auto_context_model = auto_context_model if auto_context_model else OpenAIChatAPI()
         self.vector_db = (
             vector_db
             if vector_db
@@ -167,6 +194,7 @@ class KnowledgeBase:
         components = {
             "embedding_model": self.embedding_model.to_dict(),
             "reranker": self.reranker.to_dict(),
+            "hybrid_search": self.hybrid_search.to_dict(),
             "auto_context_model": self.auto_context_model.to_dict(),
             "vector_db": self.vector_db.to_dict(),
             "chunk_db": self.chunk_db.to_dict(),
@@ -177,7 +205,17 @@ class KnowledgeBase:
 
         self.metadata_storage.save(full_data, self.kb_id)
 
-    def _load(self, auto_context_model=None, reranker=None, file_system=None, chunk_db=None, vector_db=None):
+    @staticmethod
+    def _merge_component_config(
+        stored_config: Optional[dict], additional_config: Optional[dict]
+    ) -> dict:
+        """Merge runtime component settings over the stored configuration."""
+        merged_config = dict(stored_config or {})
+        merged_config.update(additional_config or {})
+        return merged_config
+
+    def _load(self, auto_context_model=None, reranker=None, file_system=None, chunk_db=None, vector_db=None,
+        additional_config: Optional[dict] = None, hybrid_search=None):
         """Load a knowledge base configuration from disk.
 
         Internal method to deserialize components and metadata.
@@ -188,30 +226,49 @@ class KnowledgeBase:
             file_system (Optional[FileSystem], optional): Override stored file system.
             chunk_db (Optional[ChunkDB], optional): Override stored chunk database.
             vector_db (Optional[VectorDB], optional): Override stored vector database.
+            hybrid_search (Optional[HybridSearch], optional): Override stored
+                hybrid-search component.
+            additional_config (Optional[dict], optional): Runtime configuration
+                overrides for stored component configurations.
 
         Note:
             Only auto_context_model and reranker can safely override stored components.
             Other component overrides may break functionality if not compatible.
         """
         data = self.metadata_storage.load(self.kb_id)
-        self.kb_metadata = {
-            key: value for key, value in data.items() if key != "components"
-        }
+        self.kb_metadata = {key: value for key, value in data.items() if key != "components"}
         components = data.get("components", {})
         # Deserialize components
-        self.embedding_model = Embedding.from_dict(
-            components.get("embedding_model", {}))
+        self.embedding_model = Embedding.from_dict(components.get("embedding_model", {}))
         
         self.reranker = (
             reranker
             if reranker
             else Reranker.from_dict(components.get("reranker", {}))
         )
+        hybrid_search_config = components.get("hybrid_search")
+        self.hybrid_search = (
+            hybrid_search
+            if hybrid_search is not None
+            else HybridSearch.from_dict(hybrid_search_config)
+            if hybrid_search_config
+            else RelativeScoreFusion()
+        )
         self.auto_context_model = (
             auto_context_model
             if auto_context_model
             else LLM.from_dict(components.get("auto_context_model", {}))
         )
+        additional_config = additional_config or {}
+        vector_db_config = self._merge_component_config(
+            components.get("vector_db", {}),
+            additional_config.get("vector_db", {}),
+        )
+        chunk_db_config = self._merge_component_config(
+            components.get("chunk_db", {}),
+            additional_config.get("chunk_db", {}),
+        )
+
         # Log warnings for overridden components
         base_extra = {"kb_id": self.kb_id}
         if vector_db is not None:
@@ -219,13 +276,13 @@ class KnowledgeBase:
         self.vector_db = (
             vector_db
             if vector_db
-            else VectorDB.from_dict(components.get("vector_db", {}))
+            else VectorDB.from_dict(vector_db_config)
         )
         if chunk_db is not None:
             logging.warning(f"Overriding stored chunk_db for KB '{self.kb_id}' during load.", extra=base_extra)
             self.chunk_db = chunk_db
         else:
-            self.chunk_db = ChunkDB.from_dict(components.get("chunk_db", {}))
+            self.chunk_db = ChunkDB.from_dict(chunk_db_config)
 
         file_system_dict = components.get("file_system", None)
 
@@ -571,6 +628,170 @@ class KnowledgeBase:
             # Re-raise the exception
             raise
 
+    def add_document_text_only(
+        self,
+        doc_id: str,
+        text: str = "",
+        file_path: str = "",
+        document_title: str = "",
+        file_parsing_config: dict = {},
+        chunking_config: dict = {},
+        chunk_size: int = None,
+        min_length_for_chunking: int = None,
+        supp_id: str = "",
+        metadata: dict = {},
+    ) -> None:
+        """Add a document without LLM calls, embeddings, or vector storage.
+        The main use case of this function is to be used in conjunction with a
+        ChunkDB that supports full-text capabilities. This allows adding a document
+        to the KB when speed or cost are important variables to be accounted for.
+
+        Parsing uses the non-VLM file parser and deterministic chunking. The
+        resulting chunks are stored only in ``chunk_db`` and can therefore be
+        retrieved with text search.
+        """
+        ingestion_logger = logging.getLogger("dsrag.ingestion")
+        base_extra = {"kb_id": self.kb_id, "doc_id": doc_id}
+        if file_path:
+            base_extra["file_path"] = file_path
+        overall_start_time = time.perf_counter()
+
+        try:
+            if text == "" and file_path == "":
+                raise ValueError("Either text or file_path must be provided")
+            if "/" in doc_id:
+                raise ValueError("doc_id cannot contain '/' characters")
+            if self.chunk_db.doc_id_exists(doc_id):
+                ingestion_logger.warning(
+                    "Document already exists in knowledge base, skipping",
+                    extra=base_extra,
+                )
+                return
+
+            file_parsing_config = dict(file_parsing_config or {})
+            chunking_config = dict(chunking_config or {})
+            metadata = dict(metadata or {})
+            if file_parsing_config.get("use_vlm", False):
+                raise ValueError(
+                    "add_document_text_only does not support VLM parsing"
+                )
+            file_parsing_config["use_vlm"] = False
+            if chunk_size is not None:
+                chunking_config["chunk_size"] = chunk_size
+            if min_length_for_chunking is not None:
+                chunking_config["min_length_for_chunking"] = min_length_for_chunking
+
+            sections, chunks = parse_and_chunk(
+                kb_id=self.kb_id,
+                doc_id=doc_id,
+                file_path=file_path,
+                text=text,
+                file_parsing_config=file_parsing_config,
+                # Semantic sectioning is model-backed and must remain disabled.
+                semantic_sectioning_config={"use_semantic_sectioning": False},
+                chunking_config=chunking_config,
+                file_system=self.file_system,
+            )
+
+            title = document_title or doc_id
+            for chunk in chunks:
+                section_index = chunk.get("section_index")
+                section_title = ""
+                if section_index is not None and 0 <= section_index < len(sections):
+                    section_title = sections[section_index].get("title", "") or ""
+                chunk["document_title"] = title
+                chunk["document_summary"] = ""
+                chunk["section_title"] = section_title
+                chunk["section_summary"] = ""
+
+            add_chunks_to_db(chunk_db=self.chunk_db, chunks=chunks, chunks_to_embed=chunks, chunk_embeddings=chunks,
+                metadata=metadata, doc_id=doc_id, supp_id=supp_id)
+            self._save()
+            ingestion_logger.info(
+                "Text-only document ingestion successful",
+                extra={
+                    **base_extra,
+                    "total_duration_s": round(
+                        time.perf_counter() - overall_start_time, 4
+                    ),
+                    "num_sections": len(sections),
+                    "num_chunks": len(chunks),
+                },
+            )
+        except Exception as e:
+            ingestion_logger.error(
+                "Text-only document ingestion failed",
+                extra={
+                    **base_extra,
+                    "total_duration_s": round(
+                        time.perf_counter() - overall_start_time, 4
+                    ),
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+            raise
+
+    def add_documents_text_only(
+        self,
+        documents: List[Dict[str, Union[str, dict]]],
+        max_workers: int = 1,
+        show_progress: bool = True,
+        rate_limit_pause: float = 0.0,
+    ) -> List[str]:
+        """Add multiple documents using deterministic text-only ingestion."""
+        successful_uploads = []
+
+        def process_document(doc: Dict) -> Optional[str]:
+            try:
+                doc_params = doc.copy()
+                doc_id = doc_params["doc_id"]
+                self.add_document_text_only(
+                    doc_id=doc_id,
+                    text=doc_params.get("text", ""),
+                    file_path=doc_params.get("file_path", ""),
+                    document_title=doc_params.get("document_title", ""),
+                    file_parsing_config=dict(
+                        doc_params.get("file_parsing_config", {}) or {}
+                    ),
+                    chunking_config=dict(
+                        doc_params.get("chunking_config", {}) or {}
+                    ),
+                    chunk_size=doc_params.get("chunk_size"),
+                    min_length_for_chunking=doc_params.get(
+                        "min_length_for_chunking"
+                    ),
+                    supp_id=doc_params.get("supp_id", ""),
+                    metadata=dict(doc_params.get("metadata", {}) or {}),
+                )
+                if rate_limit_pause > 0:
+                    time.sleep(rate_limit_pause)
+                return doc_id
+            except Exception as e:
+                logging.getLogger("dsrag.ingestion").error(
+                    "Error processing text-only document",
+                    extra={"doc_id": doc.get("doc_id", "unknown"), "error": str(e)},
+                    exc_info=True,
+                )
+                return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_doc = {
+                executor.submit(process_document, doc): doc for doc in documents
+            }
+            futures = concurrent.futures.as_completed(future_to_doc)
+            if show_progress:
+                futures = tqdm(
+                    futures,
+                    total=len(documents),
+                    desc="Processing text-only documents",
+                )
+            for future in futures:
+                doc_id = future.result()
+                if doc_id:
+                    successful_uploads.append(doc_id)
+        return successful_uploads
+
     def add_documents(
         self,
         documents: List[Dict[str, Union[str, dict]]],
@@ -743,32 +964,83 @@ class KnowledgeBase:
         """
         return np.dot(v1, v2)
 
-    def _search(self, query: str, top_k: int, metadata_filter: Optional[MetadataFilter] = None) -> list:
+    def _search(
+        self,
+        query: str,
+        top_k: int,
+        metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
+        search_mode: str = "vector",
+        apply_reranker: bool = True,
+    ) -> list:
         """Search the knowledge base for relevant chunks.
 
         Internal method for single query search.
         """
-        query_vector = self._get_embeddings([query], input_type="query")[0]
-        search_results = self.vector_db.search(query_vector, top_k, metadata_filter)
+        if search_mode == "hybrid":
+            text_results = self._search(query, top_k, metadata_filter, "text", apply_reranker=False)
+            vector_results = self._search(query, top_k, metadata_filter, "vector", apply_reranker=False)
+            search_results = self.hybrid_search.hybrid_search(text_results, vector_results)
+        elif search_mode == "text":
+            partial_results = self.chunk_db.search(query, top_k, metadata_filter)
+            search_results = []
+            for result in partial_results:
+                metadata = dict(result.get("metadata") or {})
+                document_title = result.get("document_title") or ""
+                section_title = result.get("section_title") or ""
+                metadata.update(
+                    {
+                        "doc_id": result["doc_id"],
+                        "chunk_index": result["chunk_index"],
+                        "chunk_text": result["chunk_text"],
+                        "chunk_header": f"{document_title} {section_title}".strip(),
+                    }
+                )
+                search_results.append(
+                    {
+                        "doc_id": result["doc_id"],
+                        "vector": None,
+                        "metadata": metadata,
+                        "similarity": result["score"],
+                    }
+                )
+        elif search_mode == "vector":
+            query_vector = self._get_embeddings([query], input_type="query")[0]
+            search_results = self.vector_db.search(query_vector, top_k, metadata_filter)
+        else:
+            raise ValueError("search_mode must be one of 'vector', 'text', or 'hybrid'")
+
         if len(search_results) == 0:
             return []
-        search_results = self.reranker.rerank_search_results(query, search_results)
+        if apply_reranker:
+            return self.reranker.rerank_search_results(query, search_results)
         return search_results
 
-    def _get_all_ranked_results(self, search_queries: list[str], metadata_filter: Optional[MetadataFilter] = None):
+    def _get_all_ranked_results(
+        self,
+        search_queries: list[str],
+        metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
+        search_mode: str = "vector",
+    ):
         """Execute multiple search queries.
 
         Internal method for parallel query execution.
         """
+        if search_mode == "text":
+            return [
+                self._search(query, 200, metadata_filter, search_mode)
+                for query in search_queries
+            ]
+
         if self.vector_db.is_async():
             all_ranked_results = []
             for query in search_queries:
-                ranked_results = self._search(query, 20, metadata_filter)
+                ranked_results = self._search(query, 40, metadata_filter, search_mode)
                 all_ranked_results.append(ranked_results)
             return all_ranked_results
         else:
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = [executor.submit(self._search, query, 200, metadata_filter) for query in search_queries]
+                futures = [executor.submit(self._search, query, 40, metadata_filter, search_mode, True)
+                           for query in search_queries]
                 all_ranked_results = []
                 for future in futures:
                     ranked_results = future.result()
@@ -835,6 +1107,7 @@ class KnowledgeBase:
         latency_profiling: bool = False,
         metadata_filter: Optional[MetadataFilter | MetadataFilters] = None,
         return_mode: str = "text",
+        search_mode: str = "vector",
     ) -> list[dict]:
         """Query the knowledge base to retrieve relevant segments.
 
@@ -877,6 +1150,10 @@ class KnowledgeBase:
                 - "page_images": Return list of page image paths
                 - "dynamic": Choose format based on content type
                 Defaults to "text".
+            search_mode (str, optional): Search strategy. ``"vector"`` uses
+                semantic vector search, ``"text"`` uses the chunk database's
+                full-text search, and ``"hybrid"`` combines both search
+                strategies. Defaults to "vector".
 
         Returns:
             list[dict]: List of segment information dictionaries, ordered by relevance.
@@ -932,8 +1209,14 @@ class KnowledgeBase:
                 "rse_params": rse_params if isinstance(rse_params, dict) else {"preset": rse_params},
                 "metadata_filter": metadata_filter,
                 "return_mode": return_mode,
+                "search_mode": search_mode,
                 "reranker_model": self.reranker.__class__.__name__
             })
+
+            if search_mode not in ("vector", "text", "hybrid"):
+                raise ValueError(
+                    "search_mode must be one of 'vector', 'text', or 'hybrid'"
+                )
             
             # check if the rse_params is a preset name and convert it to a dictionary if it is
             if isinstance(rse_params, str) and rse_params in RSE_PARAMS_PRESETS:
@@ -972,7 +1255,11 @@ class KnowledgeBase:
 
             # --- Search/Rerank Step ---
             step_start_time = time.perf_counter()
-            all_ranked_results = self._get_all_ranked_results(search_queries=search_queries, metadata_filter=metadata_filter)
+            all_ranked_results = self._get_all_ranked_results(
+                search_queries=search_queries,
+                metadata_filter=metadata_filter,
+                search_mode=search_mode,
+            )
             step_duration = time.perf_counter() - step_start_time
             
             # Get the number of initial results per query

@@ -135,6 +135,28 @@ for segment in results:
     print(segment)
 ```
 
+By default, queries use vector search. You can also select text search or
+hybrid search with the `search_mode` argument:
+
+```python
+# Semantic vector search (default)
+results = kb.query(search_queries, search_mode="vector")
+
+# Full-text search
+results = kb.query(search_queries, search_mode="text")
+
+# Combine full-text and vector search
+results = kb.query(search_queries, search_mode="hybrid")
+```
+
+Hybrid search runs both text and vector retrieval, combines their results, and
+then reranks the fused chunk results before Relevant Segment Extraction (RSE).
+It uses the
+`RelativeScoreFusion` implementation by default, which normalizes the scores
+from each search independently and combines them with equal weights. Hybrid
+and text search require a `ChunkDB` implementation with text-search support,
+such as a configured `PostgresChunkDB`.
+
 #### Basic customization
 Now let's look at an example of how we can customize the configuration of a KnowledgeBase. In this case, we'll customize it so that it only uses OpenAI (useful if you don't have an API key for Cohere). To do so, we need to pass in a subclass of `LLM` and a subclass of `Reranker`. We'll use `gpt-4o-mini` for the LLM (this is what gets used for document and section summarization in AutoContext) and since OpenAI doesn't offer a reranker, we'll use the `NoReranker` class for that.
 ```python
@@ -161,13 +183,14 @@ A KnowledgeBase object takes in documents (in the form of raw text) and does chu
 KnowledgeBase objects are persistent by default. The full configuration needed to reconstruct the object gets saved as a JSON file upon creation and updating.
 
 ## Components
-There are six key components that define the configuration of a KnowledgeBase, each of which are customizable:
+There are seven key components that define the configuration of a KnowledgeBase, each of which are customizable:
 1. VectorDB
 2. ChunkDB
 3. Embedding
 4. Reranker
-5. LLM
-6. FileSystem
+5. HybridSearch
+6. LLM
+7. FileSystem
 
 There are defaults for each of these components, as well as alternative options included in the repo. You can also define fully custom components by subclassing the base classes and passing in an instance of that subclass to the KnowledgeBase constructor. 
 
@@ -205,6 +228,33 @@ The currently available options are:
 - `CohereReranker`
 - `VoyageReranker`
 - `NoReranker`
+
+#### HybridSearch
+The `HybridSearch` component combines the results from text and vector search
+when `search_mode="hybrid"` is used. The built-in implementation is
+`RelativeScoreFusion`, which performs independent min-max score normalization
+for each search result list before combining them.
+
+The `alpha` parameter controls the vector-search weight. Text search receives
+the remaining weight (`1 - alpha`), so the default `alpha=0.5` weights both
+strategies equally.
+
+```python
+from dsrag.hybrid_search import RelativeScoreFusion
+
+hybrid_search = RelativeScoreFusion(alpha=0.7)
+kb = KnowledgeBase(
+    kb_id="levels_of_agi",
+    hybrid_search=hybrid_search,
+)
+results = kb.query(
+    ["What are the levels of AGI?"],
+    search_mode="hybrid",
+)
+```
+
+Custom fusion strategies can be created by subclassing `HybridSearch` and
+implementing its `hybrid_search` method.
 
 #### LLM
 This defines the LLM to be used for document title generation, document summarization, and section summarization in AutoContext.
@@ -308,7 +358,7 @@ metadata_filter = {
 Documents -> VLM file parsing -> semantic sectioning -> chunking -> AutoContext -> embedding -> chunk and vector database upsert
 
 ## Query flow
-Queries -> vector database search -> reranking -> RSE -> results
+Queries -> text/vector retrieval -> optional hybrid fusion -> reranking -> RSE -> results
 
 # Community and support
 You can join our [Discord](https://discord.gg/NTUVX9DmQ3) to ask questions, make suggestions, and discuss contributions.
